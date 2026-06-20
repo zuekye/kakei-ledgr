@@ -24,7 +24,6 @@ const {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend, CartesianGrid,
 } = Recharts;
-// XLSX はCDNからグローバルに読み込まれる
 
 
 // ---------- 定数 ----------
@@ -40,42 +39,55 @@ const CAT_MAP = Object.fromEntries(CATEGORIES.map((c) => [c.key, c]));
 const ADV = "adv"; // 立替金（固定ID・削除不可）
 
 const DEFAULT_ACCOUNTS = [
-  { id: "cash", name: "現金", type: "asset" },
-  { id: "bank", name: "銀行", type: "asset" },
-  { id: "stock", name: "株式", type: "asset", market: true },
+  // 資産（借方残高が通常）
+  { id: "cash", name: "現金👛", type: "asset" },
+  { id: "bank", name: "楽天銀行🏦", type: "asset" },
   { id: "nisa", name: "NISA投資信託", type: "asset", market: true },
+  { id: "nisa_jp", name: "NISA日本株", type: "asset", market: true },
+  { id: "nisa_us", name: "NISA米国株", type: "asset", market: true },
+  { id: "sbi_n225", name: "SBI 投資信託(日経225)", type: "asset", market: true },
   { id: "paypay", name: "PayPayポイント運用", type: "asset", market: true },
   { id: "point", name: "ポイント残高", type: "asset", market: true },
   { id: ADV, name: "立替金", type: "asset", protected: true },
-  // クレジットカード（card / closingDay: 締め日(末締めは31) / payMonth: 何ヶ月後 / payDay: 支払日）
+  // 負債（貸方残高が通常）クレジットカード
   { id: "cc_amexg", name: "AMEX Business Gold", type: "liability", card: true, closingDay: 31, payMonth: 1, payDay: 25 },
   { id: "cc_amexh", name: "AMEX Hilton", type: "liability", card: true, closingDay: 31, payMonth: 1, payDay: 25 },
-  { id: "cc_apa", name: "アパエポスプラチナ", type: "liability", card: true, closingDay: 27, payMonth: 2, payDay: 6 },
-  { id: "cc_rakuten", name: "楽天カード", type: "liability", card: true, closingDay: 31, payMonth: 1, payDay: 27 },
+  { id: "cc_paypay", name: "PayPayカード", type: "liability", card: true, closingDay: 31, payMonth: 1, payDay: 27 },
+  { id: "cc_apa", name: "APA EPOS", type: "liability", card: true, closingDay: 27, payMonth: 2, payDay: 6 },
   { id: "cc_smccnl", name: "三井住友カードNL", type: "liability", card: true, closingDay: 15, payMonth: 2, payDay: 10 },
   { id: "cc_view", name: "ビックカメラSuica（VIEW）", type: "liability", card: true, closingDay: 31, payMonth: 2, payDay: 10 },
-  { id: "cc_paypay", name: "PayPayカード", type: "liability", card: true, closingDay: 31, payMonth: 1, payDay: 27 },
+  { id: "cc_rakuten", name: "楽天カード", type: "liability", card: true, closingDay: 31, payMonth: 1, payDay: 27 },
+  // 純資産
   { id: "cap", name: "元入金", type: "equity" },
+  // 収益（貸方残高が通常）
   { id: "sal", name: "給料", type: "income" },
   { id: "bon", name: "賞与", type: "income" },
   { id: "div", name: "配当金", type: "income" },
   { id: "gain", name: "評価益", type: "income" },
   { id: "adjp", name: "現金過不足（雑収入）", type: "income" },
   { id: "oin", name: "その他収入", type: "income" },
+  // 費用（借方残高が通常）
   { id: "liv", name: "生活費", type: "expense" },
   { id: "rent", name: "住居費", type: "expense" },
   { id: "food", name: "食費", type: "expense" },
-  { id: "cloth", name: "被服費", type: "expense" },
-  { id: "book", name: "書籍・教育費", type: "expense" },
-  { id: "amuse", name: "娯楽費", type: "expense" },
+  { id: "cloth", name: "衣服・美容", type: "expense" },
+  { id: "book", name: "書籍・教養", type: "expense" },
+  { id: "amuse", name: "趣味・娯楽", type: "expense" },
+  { id: "health", name: "健康・医療費", type: "expense" },
+  { id: "goods", name: "消耗品", type: "expense" },
   { id: "subsc", name: "サブスク費", type: "expense" },
+  { id: "gas", name: "ガソリン代", type: "expense" },
+  { id: "daily", name: "日用品", type: "expense" },
   { id: "travel", name: "旅行費", type: "expense" },
   { id: "annual_card", name: "年会費(カード)", type: "expense" },
   { id: "annual", name: "年会費", type: "expense" },
-  { id: "special", name: "特別費", type: "expense" },
-  { id: "oex", name: "その他支出", type: "expense" },
   { id: "loss", name: "評価損", type: "expense" },
   { id: "adjm", name: "現金過不足（雑損失）", type: "expense" },
+  { id: "comm", name: "通信費", type: "expense" },
+  { id: "car", name: "自動車", type: "expense" },
+  { id: "special", name: "特別費", type: "expense" },
+  { id: "tax", name: "税金", type: "expense" },
+  { id: "oex", name: "その他支出", type: "expense" },
 ];
 
 const DEFAULT_TEMPLATES = [
@@ -429,6 +441,11 @@ function JournalTab({ accounts, accMap, entries, templates, setTemplates, onAdd,
   const [memo, setMemo] = useState("");
   const [error, setError] = useState("");
   const [editTpl, setEditTpl] = useState(false);
+  // 絞り込み・並べ替え
+  const [filterAcc, setFilterAcc] = useState("all"); // 科目ID or "all"
+  const [keyword, setKeyword] = useState("");
+  const [sortKey, setSortKey] = useState("date_desc"); // date_desc | date_asc | amount_desc | amount_asc
+  const [showFilter, setShowFilter] = useState(false);
 
   const applyTemplate = (t) => {
     setDebit(t.debit); setCredit(t.credit);
@@ -452,7 +469,24 @@ function JournalTab({ accounts, accMap, entries, templates, setTemplates, onAdd,
     setAmount(""); setMemo(""); setError("");
   };
 
-  const sorted = [...entries].sort((a, b) => (a.date < b.date ? 1 : -1));
+  // 絞り込み（科目・キーワード）→ 並べ替え
+  const kw = keyword.trim().toLowerCase();
+  const filtered = entries.filter((e) => {
+    if (filterAcc !== "all" && e.debit !== filterAcc && e.credit !== filterAcc) return false;
+    if (kw) {
+      const hay = `${e.memo || ""} ${accMap[e.debit]?.name || ""} ${accMap[e.credit]?.name || ""}`.toLowerCase();
+      if (!hay.includes(kw)) return false;
+    }
+    return true;
+  });
+  const sorted = [...filtered].sort((a, b) => {
+    if (sortKey === "date_asc") return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+    if (sortKey === "amount_desc") return b.amount - a.amount;
+    if (sortKey === "amount_asc") return a.amount - b.amount;
+    return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; // date_desc
+  });
+  const filterActive = filterAcc !== "all" || kw !== "";
+  const filteredTotal = filtered.reduce((s, e) => s + e.amount, 0);
 
   return (
     <div>
@@ -522,12 +556,70 @@ function JournalTab({ accounts, accMap, entries, templates, setTemplates, onAdd,
 
       {/* 仕訳一覧 */}
       <section className="mt-6">
-        <h2 className="text-sm mb-2" style={{ fontFamily: MINCHO, fontWeight: 600 }}>
-          仕訳帳{sorted.length > 0 && `（${sorted.length}件）`}
-        </h2>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm" style={{ fontFamily: MINCHO, fontWeight: 600 }}>
+            仕訳帳{entries.length > 0 && `（${filterActive ? `${sorted.length}/${entries.length}` : sorted.length}件）`}
+          </h2>
+          <button onClick={() => setShowFilter(!showFilter)}
+            className="text-xs px-3 py-1.5 rounded border"
+            style={{ borderColor: filterActive ? INK : RULE, color: filterActive ? INK : MUTE, background: filterActive ? "#fff" : "transparent" }}>
+            絞り込み{filterActive ? " ●" : ""}{showFilter ? " ▲" : " ▼"}
+          </button>
+        </div>
+
+        {showFilter && (
+          <div className="bg-white border rounded-lg p-3 mb-3 space-y-2" style={{ borderColor: RULE }}>
+            <div>
+              <label className="text-xs" style={{ color: MUTE }}>科目で絞る</label>
+              <select value={filterAcc} onChange={(ev) => setFilterAcc(ev.target.value)}
+                className="w-full bg-white border rounded px-2 py-2 text-sm mt-0.5" style={{ borderColor: RULE }}>
+                <option value="all">すべての科目</option>
+                {CATEGORIES.map((c) => (
+                  <optgroup key={c.key} label={c.label}>
+                    {accounts.filter((a) => a.type === c.key).map((a) => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs" style={{ color: MUTE }}>キーワード（摘要・店名・科目名）</label>
+              <input type="text" value={keyword} onChange={(ev) => setKeyword(ev.target.value)}
+                placeholder="例: ユニクロ、コンビニ"
+                className="w-full border rounded px-2 py-2 text-sm mt-0.5" style={{ borderColor: RULE }} />
+            </div>
+            <div>
+              <label className="text-xs" style={{ color: MUTE }}>並べ替え</label>
+              <div className="flex gap-1 mt-0.5 flex-wrap">
+                {[["date_desc", "新しい順"], ["date_asc", "古い順"], ["amount_desc", "高い順"], ["amount_asc", "安い順"]].map(([k, label]) => (
+                  <button key={k} onClick={() => setSortKey(k)}
+                    className="text-xs px-2.5 py-1.5 rounded border"
+                    style={{
+                      borderColor: sortKey === k ? INK : RULE,
+                      background: sortKey === k ? INK : "transparent",
+                      color: sortKey === k ? "#fff" : MUTE,
+                    }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {filterActive && (
+              <div className="flex items-center justify-between border-t pt-2" style={{ borderColor: RULE }}>
+                <button onClick={() => { setFilterAcc("all"); setKeyword(""); }}
+                  className="text-xs px-2 py-1" style={{ color: SHU }}>絞り込みを解除</button>
+                <span className="text-xs" style={{ color: MUTE }}>
+                  該当{sorted.length}件・合計 <span style={{ fontFamily: MINCHO, color: INK }}>{yen(filteredTotal)}</span>
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         {sorted.length === 0 ? (
           <p className="text-sm py-8 text-center" style={{ color: MUTE }}>
-            この期間の仕訳はまだありません。上のフォームかテンプレートから記帳できます。
+            {filterActive ? "条件に合う仕訳がありません。絞り込みを変えてみてください。" : "この期間の仕訳はまだありません。上のフォームかテンプレートから記帳できます。"}
           </p>
         ) : (
           <ul className="bg-white border rounded-lg divide-y" style={{ borderColor: RULE }}>
@@ -737,11 +829,27 @@ function CardsTab({ accounts, setAccounts, accMap, entries, onAdd, onDelete, onS
   const selfAll = cards.reduce((s, c) => s + cardBreakdown(c.id, entries).self, 0);
   const advAll = cards.reduce((s, c) => s + cardBreakdown(c.id, entries).advance, 0);
 
+  // 全額引き落とし（未払残高すべて）
   const payCard = (card) => {
     const bd = cardBreakdown(card.id, entries);
     if (bd.total <= 0) return;
-    onAdd({ id: uid(), date: today(), debit: card.id, credit: payAcc, amount: bd.total, memo: `${card.name} 引き落とし` });
+    onAdd({ id: uid(), date: today(), debit: card.id, credit: payAcc, amount: bd.total, memo: `${card.name} 引き落とし（全額）` });
   };
+
+  // 請求期間（締め日サイクル）単位の引き落とし
+  const payCycle = (card, range, amount) => {
+    if (amount <= 0) return;
+    const cycleKey = range.to; // 期間の締め日で識別
+    onAdd({
+      id: uid(), date: today(), debit: card.id, credit: payAcc, amount,
+      memo: `${card.name} 引き落とし（${range.from.slice(2).replaceAll("-", "/")}〜${range.to.slice(2).replaceAll("-", "/")}）`,
+      cycleKey, cardId: card.id,
+    });
+  };
+
+  // ある請求期間がすでに引き落とし済みか
+  const isCyclePaid = (card, range) =>
+    entries.some((e) => e.cardId === card.id && e.cycleKey === range.to);
 
   return (
     <div className="space-y-5">
@@ -810,14 +918,15 @@ function CardsTab({ accounts, setAccounts, accMap, entries, onAdd, onDelete, onS
                     </div>
                   </div>
 
-                  {/* 請求期間の利用累計 */}
-                  <CardUsageSummary card={card} entries={entries} />
+                  {/* 請求期間の利用累計・期間引き落とし */}
+                  <CardUsageSummary card={card} entries={entries}
+                    onPayCycle={payCycle} isCyclePaid={isCyclePaid} />
 
                   {/* 操作 */}
                   <div className="px-4 py-2.5 border-t flex gap-2 flex-wrap items-center" style={{ borderColor: RULE }}>
                     <button onClick={() => payCard(card)} disabled={bd.total <= 0}
                       className="text-xs px-3 py-1.5 rounded text-white" style={{ background: INK, opacity: bd.total <= 0 ? 0.4 : 1 }}>
-                      全額引き落とし（{yen(bd.total)}）
+                      未払を全額引き落とし（{yen(bd.total)}）
                     </button>
                     <button onClick={() => setEditId(editId === card.id ? null : card.id)}
                       className="text-xs px-3 py-1.5 rounded border" style={{ borderColor: RULE, color: MUTE }}>
@@ -875,7 +984,7 @@ function CardsTab({ accounts, setAccounts, accMap, entries, onAdd, onDelete, onS
 }
 
 // カード利用累計（請求期間ごと）
-function CardUsageSummary({ card, entries }) {
+function CardUsageSummary({ card, entries, onPayCycle, isCyclePaid }) {
   const auto = billingCycle(card, today());
   const [mode, setMode] = useState("auto"); // auto | custom
   const [from, setFrom] = useState(auto.from);
@@ -893,6 +1002,7 @@ function CardUsageSummary({ card, entries }) {
 
   const range = mode === "auto" ? shiftedAuto : { from, to };
   const usage = cardUsageInRange(card.id, entries, range.from, range.to);
+  const paid = mode === "auto" && isCyclePaid && isCyclePaid(card, range);
 
   const fmt = (d) => (d ? d.slice(2).replaceAll("-", "/") : "—");
 
@@ -949,9 +1059,28 @@ function CardUsageSummary({ card, entries }) {
             </div>
           </div>
         </div>
+
+        {/* この請求期間を引き落とす（締め日サイクルモードのみ） */}
+        {mode === "auto" && (
+          <div className="mt-2">
+            {paid ? (
+              <p className="text-xs px-1 py-1.5 rounded text-center" style={{ color: MUTE, background: "#fff", border: `1px solid ${RULE}` }}>
+                この期間（{fmt(range.from)}〜{fmt(range.to)}）は引き落とし記帳済みです
+              </p>
+            ) : (
+              <button onClick={() => onPayCycle && onPayCycle(card, range, usage.total)}
+                disabled={usage.total <= 0}
+                className="w-full text-xs px-3 py-2 rounded text-white"
+                style={{ background: INK, opacity: usage.total <= 0 ? 0.4 : 1 }}>
+                この期間を引き落とす（{yen(usage.total)}）
+              </button>
+            )}
+          </div>
+        )}
+
         {mode === "auto" && (
           <p className="text-xs mt-1.5" style={{ color: MUTE }}>
-            締め日（{card.closingDay === 31 ? "月末" : card.closingDay + "日"}）で区切った請求期間です。締め日は支払い設定で変更できます。
+            締め日（{card.closingDay === 31 ? "月末" : card.closingDay + "日"}）で区切った請求期間です。◀▶で期間を選び、その期間分だけ引き落とせます。締め日は支払い設定で変更できます。
           </p>
         )}
       </div>
@@ -1100,6 +1229,22 @@ function BudgetTab({ accounts, accMap, totals, budgets, setBudgets, fixed, setFi
     onAdd({ id: uid(), date, debit: f.debit, credit: f.credit, amount: f.amount, memo: `固定費: ${f.name}`, fixedId: f.id });
   };
 
+  // 固定費の並び替え（上下入れ替え）
+  const moveFixed = (idx, dir) => {
+    const j = idx + dir;
+    if (j < 0 || j >= fixed.length) return;
+    setFixed((p) => {
+      const next = [...p];
+      [next[idx], next[j]] = [next[j], next[idx]];
+      return next;
+    });
+  };
+
+  // 固定費の合計と、当月の記帳状況
+  const fixedTotal = fixed.reduce((s, f) => s + f.amount, 0);
+  const fixedDoneTotal = fixed.filter((f) => recordedThisMonth(f)).reduce((s, f) => s + f.amount, 0);
+  const fixedRemain = fixedTotal - fixedDoneTotal;
+
   const budgetTotal = expenses.reduce((s, a) => s + (Number(budgets[a.id]) || 0), 0);
   const actualTotal = expenses.reduce((s, a) => s + balanceOf(a, totals), 0);
 
@@ -1152,35 +1297,69 @@ function BudgetTab({ accounts, accMap, totals, budgets, setBudgets, fixed, setFi
       <section className="bg-white border rounded-lg p-4" style={{ borderColor: RULE }}>
         <h2 className="text-sm mb-1" style={{ fontFamily: MINCHO, fontWeight: 600 }}>固定費管理</h2>
         <p className="text-xs mb-3" style={{ color: MUTE }}>
-          家賃や通信費など毎月の固定費を登録すると、ワンタップでその月の仕訳を記帳できます。
+          家賃や通信費など毎月の固定費を登録すると、ワンタップでその月の仕訳を記帳できます。▲▼で並び替えできます。
         </p>
         {fixed.length > 0 && (
-          <ul className="divide-y mb-4" style={{ borderColor: RULE }}>
-            {fixed.map((f) => {
-              const done = recordedThisMonth(f);
-              return (
-                <li key={f.id} className="py-2 flex items-center gap-3 text-sm" style={{ borderColor: RULE }}>
-                  <span className="flex-1 min-w-0">
-                    {f.name}
-                    <span className="block text-xs" style={{ color: MUTE }}>
-                      {accMap[f.debit]?.name}／{accMap[f.credit]?.name}
+          <>
+            <ul className="divide-y mb-3" style={{ borderColor: RULE }}>
+              {fixed.map((f, idx) => {
+                const done = recordedThisMonth(f);
+                return (
+                  <li key={f.id} className="py-2 flex items-center gap-2 text-sm" style={{ borderColor: RULE }}>
+                    <span className="flex flex-col leading-none">
+                      <button onClick={() => moveFixed(idx, -1)} disabled={idx === 0}
+                        className="text-xs px-1" style={{ color: idx === 0 ? RULE : MUTE }} aria-label="上へ">▲</button>
+                      <button onClick={() => moveFixed(idx, 1)} disabled={idx === fixed.length - 1}
+                        className="text-xs px-1" style={{ color: idx === fixed.length - 1 ? RULE : MUTE }} aria-label="下へ">▼</button>
                     </span>
-                  </span>
-                  <span style={{ fontFamily: MINCHO }}>{yen(f.amount)}</span>
-                  {done ? (
-                    <span className="text-xs px-2 py-1 rounded" style={{ color: MUTE, background: PAPER }}>今月記帳済</span>
-                  ) : (
-                    <button onClick={() => recordFixed(f)}
-                      className="text-xs px-3 py-1.5 rounded text-white" style={{ background: INK }}>
-                      今月分を記帳
-                    </button>
-                  )}
-                  <button onClick={() => setFixed((p) => p.filter((x) => x.id !== f.id))}
-                    className="text-xs" style={{ color: MUTE }} aria-label={`固定費「${f.name}」を削除`}>✕</button>
-                </li>
-              );
-            })}
-          </ul>
+                    <span className="flex-1 min-w-0">
+                      {f.name}
+                      <span className="block text-xs" style={{ color: MUTE }}>
+                        {accMap[f.debit]?.name}／{accMap[f.credit]?.name}
+                      </span>
+                    </span>
+                    <span style={{ fontFamily: MINCHO }}>{yen(f.amount)}</span>
+                    {done ? (
+                      <span className="text-xs px-2 py-1 rounded" style={{ color: MUTE, background: PAPER }}>今月記帳済</span>
+                    ) : (
+                      <button onClick={() => recordFixed(f)}
+                        className="text-xs px-3 py-1.5 rounded text-white" style={{ background: INK }}>
+                        今月分を記帳
+                      </button>
+                    )}
+                    <button onClick={() => setFixed((p) => p.filter((x) => x.id !== f.id))}
+                      className="text-xs" style={{ color: MUTE }} aria-label={`固定費「${f.name}」を削除`}>✕</button>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {/* 合計 */}
+            <div className="border-t pt-2 mb-3 space-y-1" style={{ borderColor: INK }}>
+              <div className="flex justify-between text-sm">
+                <span style={{ fontFamily: MINCHO, fontWeight: 600 }}>固定費 合計（月額）</span>
+                <span style={{ fontFamily: MINCHO, fontWeight: 600 }}>{yen(fixedTotal)}</span>
+              </div>
+              <div className="flex justify-between text-xs" style={{ color: MUTE }}>
+                <span>うち今月記帳済</span>
+                <span style={{ fontFamily: MINCHO }}>{yen(fixedDoneTotal)}</span>
+              </div>
+              <div className="flex justify-between text-xs" style={{ color: fixedRemain > 0 ? SHU : MUTE }}>
+                <span>今月の記帳残り</span>
+                <span style={{ fontFamily: MINCHO }}>{yen(fixedRemain)}</span>
+              </div>
+            </div>
+
+            {/* 一括記帳 */}
+            {fixedRemain > 0 && (
+              <button
+                onClick={() => fixed.forEach((f) => { if (!recordedThisMonth(f)) recordFixed(f); })}
+                className="w-full text-xs px-3 py-2 rounded border mb-4"
+                style={{ borderColor: INK, color: INK }}>
+                未記帳の固定費をまとめて今月分記帳（{yen(fixedRemain)}）
+              </button>
+            )}
+          </>
         )}
         <div className="flex gap-2 flex-wrap">
           <input value={fName} onChange={(ev) => setFName(ev.target.value)} placeholder="名称（例: 家賃）"
