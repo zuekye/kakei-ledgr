@@ -11,10 +11,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
-<style>
-  body { margin: 0; }
-  #loading { font-family: sans-serif; text-align: center; padding: 40px; color: #8A8470; }
-</style>
+<style>body { margin: 0; } #loading { font-family: sans-serif; text-align: center; padding: 40px; color: #8A8470; }</style>
 </head>
 <body style="background:#FBFAF6;">
 <div id="root"><div id="loading">読み込み中…</div></div>
@@ -130,6 +127,20 @@ const nextPayDate = (card, baseMonth) => {
   return `${py}-${String(pm).padStart(2, "0")}-${day}`;
 };
 
+// 請求期間（締め日 = closingDate）に対応する実際の引き落とし日を返す。
+// 締め日の属する月から payMonth ヶ月後の payDay（月末超過は月末に丸め）。
+const payDateForClosing = (card, closingDate) => {
+  const pm = card.payMonth || 1;
+  const pd = card.payDay || 27;
+  const [y, m] = closingDate.split("-").map(Number); // m: 1始まり
+  const totalIdx = (y * 12 + (m - 1)) + pm;
+  const ey = Math.floor(totalIdx / 12);
+  const em = (totalIdx % 12) + 1;
+  const lastDay = new Date(ey, em, 0).getDate();
+  const d = Math.min(pd, lastDay);
+  return `${ey}-${String(em).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+};
+
 // 指定年月の締め日を実日付に丸める（closingDay が末日超過なら月末に）
 const addDays = (dateStr, n) => {
   const d = new Date(dateStr + "T00:00:00");
@@ -165,6 +176,25 @@ const billingCycle = (card, refDate) => {
     to = closingDateOf(ny, nm, cd);
   }
   return { from, to };
+};
+
+// 現在の請求期間を基準（offset=0）に、offsetヶ月ずらした請求期間を返す。
+// 締め日(to)を月単位で動かし、from = 前月締め日の翌日 として隙間なく連続させる。
+const billingCycleByOffset = (card, offset) => {
+  const base = billingCycle(card, today()); // 今期の {from, to}
+  const cd = card.closingDay || 31;
+  // 今期の締め日(to)の年月を取得し、そこから offset ヶ月ずらす
+  const [ty, tm] = base.to.split("-").map(Number); // tm: 1始まり
+  const totalIdx = (ty * 12 + (tm - 1)) + offset;  // 月の通し番号
+  const ey = Math.floor(totalIdx / 12);
+  const em = (totalIdx % 12) + 1;
+  const toDate = closingDateOf(ey, em, cd);
+  // from = 1つ前の締め日の翌日
+  const pIdx = totalIdx - 1;
+  const py = Math.floor(pIdx / 12);
+  const pm = (pIdx % 12) + 1;
+  const fromDate = addDays(closingDateOf(py, pm, cd), 1);
+  return { from: fromDate, to: toDate };
 };
 
 // 期間内のカード利用累計（利用のみ。引き落としは含めない）を自己/立替で集計
@@ -219,6 +249,7 @@ function Kakeibo() {
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState("");
   const [history, setHistory] = useState([]); // 直前の状態スナップショット（アンドゥー用）
+  const [future, setFuture] = useState([]);   // 取り消した状態（リドゥー用）
   const [lastAction, setLastAction] = useState("");
 
   // 読み込み（v1からの移行込み）
@@ -285,9 +316,10 @@ function Kakeibo() {
     return t;
   };
 
-  // 変更前のスナップショットを履歴に積む（最大30件）
+  // 変更前のスナップショットを履歴に積む（最大30件）。新しい操作なのでリドゥー履歴は破棄。
   const pushHistory = (label) => {
     setHistory((h) => [...h.slice(-29), { entries, accounts, label }]);
+    setFuture([]);
     setLastAction(label);
   };
 
@@ -295,10 +327,25 @@ function Kakeibo() {
     setHistory((h) => {
       if (h.length === 0) return h;
       const prev = h[h.length - 1];
+      // 現在の状態をリドゥー用に退避
+      setFuture((f) => [...f.slice(-29), { entries, accounts, label: prev.label }]);
       setEntries(prev.entries);
       setAccounts(prev.accounts);
       setLastAction("");
       return h.slice(0, -1);
+    });
+  };
+
+  const redo = () => {
+    setFuture((f) => {
+      if (f.length === 0) return f;
+      const next = f[f.length - 1];
+      // 現在の状態をアンドゥー用に戻す
+      setHistory((h) => [...h.slice(-29), { entries, accounts, label: next.label }]);
+      setEntries(next.entries);
+      setAccounts(next.accounts);
+      setLastAction(next.label);
+      return f.slice(0, -1);
     });
   };
 
@@ -358,9 +405,20 @@ function Kakeibo() {
             }}>
             ↶ 元に戻す
           </button>
-          {history.length > 0 && lastAction && (
+          <button onClick={redo} disabled={future.length === 0}
+            className="text-xs px-3 py-1.5 rounded border flex items-center gap-1"
+            style={{
+              borderColor: future.length === 0 ? RULE : INK,
+              color: future.length === 0 ? RULE : INK,
+              background: future.length === 0 ? "transparent" : "#fff",
+            }}>
+            ↷ 進める
+          </button>
+          {(history.length > 0 || future.length > 0) && (
             <span className="text-xs" style={{ color: MUTE }}>
-              直前の操作：{lastAction}（あと{history.length}回戻せます）
+              {history.length > 0 && lastAction && `直前：${lastAction}`}
+              {history.length > 0 && `（戻す ${history.length}）`}
+              {future.length > 0 && `（進む ${future.length}）`}
             </span>
           )}
         </div>
@@ -446,6 +504,7 @@ function JournalTab({ accounts, accMap, entries, templates, setTemplates, onAdd,
   const [keyword, setKeyword] = useState("");
   const [sortKey, setSortKey] = useState("date_desc"); // date_desc | date_asc | amount_desc | amount_asc
   const [showFilter, setShowFilter] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(null); // 削除確認中の仕訳ID
 
   const applyTemplate = (t) => {
     setDebit(t.debit); setCredit(t.credit);
@@ -624,19 +683,33 @@ function JournalTab({ accounts, accMap, entries, templates, setTemplates, onAdd,
         ) : (
           <ul className="bg-white border rounded-lg divide-y" style={{ borderColor: RULE }}>
             {sorted.map((e) => (
-              <li key={e.id} className="px-3 py-2.5 flex items-center gap-3" style={{ borderColor: RULE }}>
-                <span className="text-xs w-12 shrink-0" style={{ color: MUTE }}>
-                  {e.date.slice(5).replace("-", "/")}
-                </span>
-                <span className="flex-1 min-w-0 text-sm">
-                  <span style={{ color: INK, fontWeight: 600 }}>{accMap[e.debit]?.name ?? "?"}</span>
-                  <span style={{ color: MUTE }}> ／ </span>
-                  <span style={{ color: SHU, fontWeight: 600 }}>{accMap[e.credit]?.name ?? "?"}</span>
-                  {e.memo && <span className="block text-xs truncate" style={{ color: MUTE }}>{e.memo}</span>}
-                </span>
-                <span className="text-sm text-right" style={{ fontFamily: MINCHO }}>{yen(e.amount)}</span>
-                <button onClick={() => onDelete(e.id)} className="text-xs px-1.5 py-1"
-                  style={{ color: MUTE }} aria-label="この仕訳を削除">✕</button>
+              <li key={e.id} className="px-3 py-2.5" style={{ borderColor: RULE }}>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs w-12 shrink-0" style={{ color: MUTE }}>
+                    {e.date.slice(5).replace("-", "/")}
+                  </span>
+                  <span className="flex-1 min-w-0 text-sm">
+                    <span style={{ color: INK, fontWeight: 600 }}>{accMap[e.debit]?.name ?? "?"}</span>
+                    <span style={{ color: MUTE }}> ／ </span>
+                    <span style={{ color: SHU, fontWeight: 600 }}>{accMap[e.credit]?.name ?? "?"}</span>
+                    {e.memo && <span className="block text-xs truncate" style={{ color: MUTE }}>{e.memo}</span>}
+                  </span>
+                  <span className="text-sm text-right" style={{ fontFamily: MINCHO }}>{yen(e.amount)}</span>
+                  <button onClick={() => setConfirmDel(confirmDel === e.id ? null : e.id)} className="text-xs px-1.5 py-1"
+                    style={{ color: MUTE }} aria-label="この仕訳を削除">✕</button>
+                </div>
+                {confirmDel === e.id && (
+                  <div className="mt-2 flex items-center justify-between rounded px-3 py-2"
+                    style={{ background: "#FDF6F5", border: `1px solid ${SHU}` }}>
+                    <span className="text-xs" style={{ color: SHU }}>この仕訳を削除しますか？</span>
+                    <span className="flex gap-2">
+                      <button onClick={() => { onDelete(e.id); setConfirmDel(null); }}
+                        className="text-xs px-3 py-1 rounded text-white" style={{ background: SHU }}>削除する</button>
+                      <button onClick={() => setConfirmDel(null)}
+                        className="text-xs px-3 py-1 rounded border" style={{ borderColor: RULE, color: MUTE }}>やめる</button>
+                    </span>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -823,25 +896,27 @@ function CardsTab({ accounts, setAccounts, accMap, entries, onAdd, onDelete, onS
   const [openId, setOpenId] = useState(cards[0]?.id ?? null);
   const [editId, setEditId] = useState(null);
   const [payAcc, setPayAcc] = useState("bank");
+  const [confirmDel, setConfirmDel] = useState(null); // 削除確認中の明細ID
+  const [fullPayDate, setFullPayDate] = useState(today()); // 全額引き落としの日付
 
   // 全期間の各カード内訳
   const totalAll = cards.reduce((s, c) => s + cardBreakdown(c.id, entries).total, 0);
   const selfAll = cards.reduce((s, c) => s + cardBreakdown(c.id, entries).self, 0);
   const advAll = cards.reduce((s, c) => s + cardBreakdown(c.id, entries).advance, 0);
 
-  // 全額引き落とし（未払残高すべて）
-  const payCard = (card) => {
+  // 全額引き落とし（未払残高すべて）。日付指定可（未指定なら今日）
+  const payCard = (card, payDate) => {
     const bd = cardBreakdown(card.id, entries);
     if (bd.total <= 0) return;
-    onAdd({ id: uid(), date: today(), debit: card.id, credit: payAcc, amount: bd.total, memo: `${card.name} 引き落とし（全額）` });
+    onAdd({ id: uid(), date: payDate || today(), debit: card.id, credit: payAcc, amount: bd.total, memo: `${card.name} 引き落とし（全額）` });
   };
 
-  // 請求期間（締め日サイクル）単位の引き落とし
-  const payCycle = (card, range, amount) => {
+  // 請求期間（締め日サイクル）単位の引き落とし。日付指定可
+  const payCycle = (card, range, amount, payDate) => {
     if (amount <= 0) return;
     const cycleKey = range.to; // 期間の締め日で識別
     onAdd({
-      id: uid(), date: today(), debit: card.id, credit: payAcc, amount,
+      id: uid(), date: payDate || today(), debit: card.id, credit: payAcc, amount,
       memo: `${card.name} 引き落とし（${range.from.slice(2).replaceAll("-", "/")}〜${range.to.slice(2).replaceAll("-", "/")}）`,
       cycleKey, cardId: card.id,
     });
@@ -923,15 +998,22 @@ function CardsTab({ accounts, setAccounts, accMap, entries, onAdd, onDelete, onS
                     onPayCycle={payCycle} isCyclePaid={isCyclePaid} />
 
                   {/* 操作 */}
-                  <div className="px-4 py-2.5 border-t flex gap-2 flex-wrap items-center" style={{ borderColor: RULE }}>
-                    <button onClick={() => payCard(card)} disabled={bd.total <= 0}
-                      className="text-xs px-3 py-1.5 rounded text-white" style={{ background: INK, opacity: bd.total <= 0 ? 0.4 : 1 }}>
-                      未払を全額引き落とし（{yen(bd.total)}）
-                    </button>
-                    <button onClick={() => setEditId(editId === card.id ? null : card.id)}
-                      className="text-xs px-3 py-1.5 rounded border" style={{ borderColor: RULE, color: MUTE }}>
-                      支払い設定を編集
-                    </button>
+                  <div className="px-4 py-2.5 border-t" style={{ borderColor: RULE }}>
+                    <div className="flex gap-2 flex-wrap items-center">
+                      <input type="date" value={fullPayDate} onChange={(ev) => setFullPayDate(ev.target.value)}
+                        className="border rounded px-2 py-1.5 text-xs" style={{ borderColor: RULE }} />
+                      <button onClick={() => payCard(card, fullPayDate)} disabled={bd.total <= 0}
+                        className="text-xs px-3 py-1.5 rounded text-white" style={{ background: INK, opacity: bd.total <= 0 ? 0.4 : 1 }}>
+                        この日付で全額引き落とし（{yen(bd.total)}）
+                      </button>
+                      <button onClick={() => setEditId(editId === card.id ? null : card.id)}
+                        className="text-xs px-3 py-1.5 rounded border" style={{ borderColor: RULE, color: MUTE }}>
+                        支払い設定を編集
+                      </button>
+                    </div>
+                    <p className="text-xs mt-1.5" style={{ color: MUTE }}>
+                      未払残高すべてを指定日に引き落とします。日付は初期で今日です。
+                    </p>
                   </div>
 
                   {/* 編集フォーム */}
@@ -950,23 +1032,37 @@ function CardsTab({ accounts, setAccounts, accMap, entries, onAdd, onDelete, onS
                           const isPayment = e.debit === card.id;
                           const isAdvance = e.credit === card.id && e.debit === ADV;
                           return (
-                            <li key={e.id} className="px-4 py-2 flex items-center gap-2 text-sm" style={{ borderColor: RULE }}>
-                              <span className="text-xs w-12 shrink-0" style={{ color: MUTE }}>{e.date.slice(5).replace("-", "/")}</span>
-                              <span className="flex-1 min-w-0 truncate">
-                                {isPayment ? "引き落とし" : (accMap[e.debit]?.name ?? "?")}
-                                {!isPayment && (
-                                  <span className="text-xs ml-1.5 px-1.5 py-0.5 rounded"
-                                    style={{ color: isAdvance ? SHU : MUTE, background: isAdvance ? "#FDF6F5" : PAPER }}>
-                                    {isAdvance ? "立替" : "自己"}
+                            <li key={e.id} className="px-4 py-2" style={{ borderColor: RULE }}>
+                              <div className="flex items-center gap-2 text-sm">
+                                <span className="text-xs w-12 shrink-0" style={{ color: MUTE }}>{e.date.slice(5).replace("-", "/")}</span>
+                                <span className="flex-1 min-w-0 truncate">
+                                  {isPayment ? "引き落とし" : (accMap[e.debit]?.name ?? "?")}
+                                  {!isPayment && (
+                                    <span className="text-xs ml-1.5 px-1.5 py-0.5 rounded"
+                                      style={{ color: isAdvance ? SHU : MUTE, background: isAdvance ? "#FDF6F5" : PAPER }}>
+                                      {isAdvance ? "立替" : "自己"}
+                                    </span>
+                                  )}
+                                  {e.memo && <span className="block text-xs truncate" style={{ color: MUTE }}>{e.memo}</span>}
+                                </span>
+                                <span style={{ fontFamily: MINCHO, color: isPayment ? INK : SHU }}>
+                                  {isPayment ? "−" : "+"}{yen(e.amount)}
+                                </span>
+                                <button onClick={() => setConfirmDel(confirmDel === e.id ? null : e.id)} className="text-xs px-1" style={{ color: MUTE }}
+                                  aria-label="この明細を削除">✕</button>
+                              </div>
+                              {confirmDel === e.id && (
+                                <div className="mt-2 flex items-center justify-between rounded px-3 py-2"
+                                  style={{ background: "#FDF6F5", border: `1px solid ${SHU}` }}>
+                                  <span className="text-xs" style={{ color: SHU }}>この明細を削除しますか？</span>
+                                  <span className="flex gap-2">
+                                    <button onClick={() => { onDelete(e.id); setConfirmDel(null); }}
+                                      className="text-xs px-3 py-1 rounded text-white" style={{ background: SHU }}>削除する</button>
+                                    <button onClick={() => setConfirmDel(null)}
+                                      className="text-xs px-3 py-1 rounded border" style={{ borderColor: RULE, color: MUTE }}>やめる</button>
                                   </span>
-                                )}
-                                {e.memo && <span className="block text-xs truncate" style={{ color: MUTE }}>{e.memo}</span>}
-                              </span>
-                              <span style={{ fontFamily: MINCHO, color: isPayment ? INK : SHU }}>
-                                {isPayment ? "−" : "+"}{yen(e.amount)}
-                              </span>
-                              <button onClick={() => onDelete(e.id)} className="text-xs px-1" style={{ color: MUTE }}
-                                aria-label="この明細を削除">✕</button>
+                                </div>
+                              )}
                             </li>
                           );
                         })}
@@ -991,18 +1087,17 @@ function CardUsageSummary({ card, entries, onPayCycle, isCyclePaid }) {
   const [to, setTo] = useState(auto.to);
   const [offset, setOffset] = useState(0); // 自動モードで何サイクル前か
 
-  // 自動モードのサイクルを offset 分ずらす
-  const shiftedAuto = useMemo(() => {
-    if (offset === 0) return auto;
-    // offset サイクル前/後の締め日基準で再計算
-    const base = new Date(auto.from + "T00:00:00");
-    base.setMonth(base.getMonth() + offset);
-    return billingCycle(card, base.toISOString().slice(0, 10));
-  }, [card, offset]);
+  // 自動モードのサイクルを offset 分ずらす（隙間なく連続する請求期間）
+  const shiftedAuto = useMemo(() => billingCycleByOffset(card, offset), [card, offset]);
 
   const range = mode === "auto" ? shiftedAuto : { from, to };
   const usage = cardUsageInRange(card.id, entries, range.from, range.to);
   const paid = mode === "auto" && isCyclePaid && isCyclePaid(card, range);
+
+  // 引き落とし日（締め日サイクルに応じた予定日を初期値に。期間が変わると追従）
+  const plannedPayDate = payDateForClosing(card, range.to);
+  const [payDate, setPayDate] = useState(plannedPayDate);
+  useEffect(() => { setPayDate(plannedPayDate); }, [plannedPayDate]);
 
   const fmt = (d) => (d ? d.slice(2).replaceAll("-", "/") : "—");
 
@@ -1068,12 +1163,22 @@ function CardUsageSummary({ card, entries, onPayCycle, isCyclePaid }) {
                 この期間（{fmt(range.from)}〜{fmt(range.to)}）は引き落とし記帳済みです
               </p>
             ) : (
-              <button onClick={() => onPayCycle && onPayCycle(card, range, usage.total)}
-                disabled={usage.total <= 0}
-                className="w-full text-xs px-3 py-2 rounded text-white"
-                style={{ background: INK, opacity: usage.total <= 0 ? 0.4 : 1 }}>
-                この期間を引き落とす（{yen(usage.total)}）
-              </button>
+              <div className="bg-white border rounded p-2.5" style={{ borderColor: RULE }}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs" style={{ color: MUTE }}>引き落とし日</span>
+                  <input type="date" value={payDate} onChange={(ev) => setPayDate(ev.target.value)}
+                    className="border rounded px-2 py-1 text-xs" style={{ borderColor: RULE }} />
+                </div>
+                <button onClick={() => onPayCycle && onPayCycle(card, range, usage.total, payDate)}
+                  disabled={usage.total <= 0}
+                  className="w-full text-xs px-3 py-2 rounded text-white"
+                  style={{ background: INK, opacity: usage.total <= 0 ? 0.4 : 1 }}>
+                  この日付で引き落とす（{yen(usage.total)}）
+                </button>
+                <p className="text-xs mt-1" style={{ color: MUTE }}>
+                  予定日（{fmt(plannedPayDate)}）を初期表示しています。過去分の記帳時は実際の引き落とし日に合わせて変更してください。
+                </p>
+              </div>
             )}
           </div>
         )}
