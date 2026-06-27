@@ -37,15 +37,15 @@ const ADV = "adv"; // 立替金（固定ID・削除不可）
 
 const DEFAULT_ACCOUNTS = [
   // 資産（借方残高が通常）
-  { id: "cash", name: "現金👛", type: "asset" },
-  { id: "bank", name: "楽天銀行🏦", type: "asset" },
-  { id: "nisa", name: "NISA投資信託", type: "asset", market: true },
-  { id: "nisa_jp", name: "NISA日本株", type: "asset", market: true },
-  { id: "nisa_us", name: "NISA米国株", type: "asset", market: true },
-  { id: "sbi_n225", name: "SBI 投資信託(日経225)", type: "asset", market: true },
-  { id: "paypay", name: "PayPayポイント運用", type: "asset", market: true },
-  { id: "point", name: "ポイント残高", type: "asset", market: true },
-  { id: ADV, name: "立替金", type: "asset", protected: true },
+  { id: "cash", name: "現金👛", type: "asset", pf: "depo" },
+  { id: "bank", name: "楽天銀行🏦", type: "asset", pf: "depo" },
+  { id: "nisa", name: "NISA投資信託", type: "asset", market: true, pf: "fund" },
+  { id: "nisa_jp", name: "NISA日本株", type: "asset", market: true, pf: "stock" },
+  { id: "nisa_us", name: "NISA米国株", type: "asset", market: true, pf: "stock" },
+  { id: "sbi_n225", name: "SBI 投資信託(日経225)", type: "asset", market: true, pf: "fund" },
+  { id: "paypay", name: "PayPayポイント運用", type: "asset", market: true, pf: "pt" },
+  { id: "point", name: "ポイント残高", type: "asset", market: true, pf: "pt" },
+  { id: ADV, name: "立替金", type: "asset", protected: true, pf: "depo" },
   // 負債（貸方残高が通常）クレジットカード
   { id: "cc_amexg", name: "AMEX Business Gold", type: "liability", card: true, closingDay: 31, payMonth: 1, payDay: 25 },
   { id: "cc_amexh", name: "AMEX Hilton", type: "liability", card: true, closingDay: 31, payMonth: 1, payDay: 25 },
@@ -106,6 +106,31 @@ const PAPER = "#FBFAF6";
 const RULE = "#D8D3C4";
 const MUTE = "#8A8470";
 const PIE_COLORS = ["#1C2B4A", "#3E5C8A", "#6E8CB8", "#A3B8D8", "#B5392E", "#D4836F", "#8A8470", "#C2BCA8"];
+
+// ポートフォリオ内訳の4カテゴリ（色はドーナツのスライスと一覧の丸で共有 = 連動）
+const PF_CATS = [
+  { key: "fund",  name: "投資信託",     color: "#D9A14E" }, // 🟡
+  { key: "stock", name: "株式（現物）", color: "#B5392E" }, // 🔴
+  { key: "depo",  name: "現金・預金",   color: "#3E6FB0" }, // 🔵
+  { key: "pt",    name: "ポイント",     color: "#4E8B57" }, // 🟢
+  { key: "other", name: "その他資産",   color: "#8E5AA8" }, // 🟣
+];
+const PF_MAP = Object.fromEntries(PF_CATS.map((c) => [c.key, c]));
+
+// ドーナツのスライス外側に「カテゴリ名＋構成比」を2行で表示するラベル
+const PF_RAD = Math.PI / 180;
+const renderPfLabel = ({ cx, cy, midAngle, outerRadius, name, percent }) => {
+  const r = outerRadius + 14;
+  const x = cx + r * Math.cos(-midAngle * PF_RAD);
+  const y = cy + r * Math.sin(-midAngle * PF_RAD);
+  const anchor = x >= cx ? "start" : "end";
+  return (
+    <text x={x} y={y} textAnchor={anchor} dominantBaseline="central" fontSize="11" fill={INK} fontWeight={600}>
+      <tspan x={x} dy="-0.35em">{name}</tspan>
+      <tspan x={x} dy="1.15em" fontSize="10" fontWeight={400} fill={MUTE}>{(percent * 100).toFixed(1)}%</tspan>
+    </text>
+  );
+};
 const MINCHO = '"Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif';
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -774,9 +799,20 @@ function AssetsTab({ accounts, setAccounts, accMap, entries, totals, onAdd, mont
     return list.slice(-24);
   }, [entries, accounts, month]);
 
-  const pieData = assets
-    .map((a) => ({ name: a.name, value: balanceOf(a, totals) }))
-    .filter((x) => x.value > 0);
+  // ポートフォリオ内訳（4カテゴリ別。色はドーナツと一覧の丸で共有 = 連動）
+  const [pfEdit, setPfEdit] = useState(false);
+  const pfData = PF_CATS
+    .map((c) => ({
+      ...c,
+      value: assets.filter((a) => a.pf === c.key).reduce((s, a) => s + balanceOf(a, totals), 0),
+    }))
+    .filter((c) => c.value > 0)
+    .sort((a, b) => b.value - a.value);
+  const pfSum = pfData.reduce((s, c) => s + c.value, 0);
+  const setPf = (id, key) => {
+    onSnapshot("内訳の割り当て");
+    setAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, pf: key || undefined } : a)));
+  };
 
   return (
     <div className="space-y-6">
@@ -814,35 +850,82 @@ function AssetsTab({ accounts, setAccounts, accMap, entries, totals, onAdd, mont
         )}
       </section>
 
-      {/* ポートフォリオ */}
+      {/* ポートフォリオ（内訳） — 4カテゴリに集約 */}
       <section className="bg-white border rounded-lg p-3" style={{ borderColor: RULE }}>
-        <h2 className="text-sm mb-2" style={{ fontFamily: MINCHO, fontWeight: 600 }}>ポートフォリオ（内訳）</h2>
-        {pieData.length === 0 ? (
-          <p className="text-sm py-6 text-center" style={{ color: MUTE }}>残高のある資産がまだありません。</p>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm" style={{ fontFamily: MINCHO, fontWeight: 600 }}>ポートフォリオ（内訳）</h2>
+          <button onClick={() => setPfEdit((v) => !v)}
+            className="text-xs px-2.5 py-1 rounded border"
+            style={{ borderColor: RULE, color: pfEdit ? INK : MUTE, fontWeight: pfEdit ? 600 : 400 }}>
+            {pfEdit ? "完了" : "内訳を設定"}
+          </button>
+        </div>
+
+        {pfEdit ? (
+          <div>
+            <p className="text-xs mb-2" style={{ color: MUTE }}>
+              各資産を4カテゴリのいずれかに割り当てます。「—」を選ぶと内訳に含めません。
+            </p>
+            <ul>
+              {assets.map((a) => {
+                const v = balanceOf(a, totals);
+                const cat = a.pf ? PF_MAP[a.pf] : null;
+                return (
+                  <li key={a.id} className="flex items-center justify-between gap-2 py-2 border-t" style={{ borderColor: RULE }}>
+                    <span className="flex items-center gap-2 text-sm min-w-0">
+                      <span style={{ width: 10, height: 10, borderRadius: 9999, flexShrink: 0,
+                        background: cat ? cat.color : "transparent",
+                        border: cat ? "none" : `1px solid ${RULE}` }} />
+                      <span className="truncate">{a.name}</span>
+                    </span>
+                    <span className="flex items-center gap-2 shrink-0">
+                      <span className="text-xs" style={{ fontFamily: MINCHO, color: MUTE }}>{yen(v)}</span>
+                      <select value={a.pf || ""} onChange={(ev) => setPf(a.id, ev.target.value)}
+                        className="text-xs bg-white border rounded px-1.5 py-1" style={{ borderColor: RULE }}>
+                        <option value="">—</option>
+                        {PF_CATS.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
+                      </select>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : pfSum <= 0 ? (
+          <p className="text-sm py-6 text-center" style={{ color: MUTE }}>
+            「内訳を設定」から各資産をカテゴリに割り当てると、ここに内訳が表示されます。
+          </p>
         ) : (
-          <div style={{ width: "100%", height: 230 }}>
-            <ResponsiveContainer>
-              <PieChart>
-                <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={1}>
-                  {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-                </Pie>
-                <Tooltip formatter={(v) => yen(v)} />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-              </PieChart>
-            </ResponsiveContainer>
+          <div>
+            <div style={{ width: "100%", height: 240 }}>
+              <ResponsiveContainer>
+                <PieChart margin={{ top: 12, right: 12, bottom: 12, left: 12 }}>
+                  <Pie data={pfData} dataKey="value" nameKey="name" innerRadius={48} outerRadius={70}
+                    paddingAngle={1} stroke="none" minAngle={4}
+                    startAngle={90} endAngle={-270}
+                    label={renderPfLabel} labelLine={false} isAnimationActive={false}>
+                    {pfData.map((c) => <Cell key={c.key} fill={c.color} />)}
+                  </Pie>
+                  <Tooltip formatter={(v) => yen(v)} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <ul className="mt-2">
+              {pfData.map((c) => (
+                <li key={c.key} className="flex items-center justify-between py-2.5 border-t" style={{ borderColor: RULE }}>
+                  <span className="flex items-center gap-2.5 text-sm">
+                    <span style={{ width: 12, height: 12, borderRadius: 9999, background: c.color, flexShrink: 0 }} />
+                    {c.name}
+                  </span>
+                  <span className="text-right">
+                    <span className="block" style={{ fontFamily: MINCHO, fontWeight: 600, color: INK }}>{yen(c.value)}</span>
+                    <span className="block text-xs" style={{ color: MUTE }}>{(c.value / pfSum * 100).toFixed(1)}%</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
-        <ul className="divide-y border-t mt-1" style={{ borderColor: RULE }}>
-          {assets.map((a) => {
-            const v = balanceOf(a, totals);
-            return (
-              <li key={a.id} className="flex justify-between py-2 text-sm" style={{ borderColor: RULE }}>
-                <span>{a.name}{a.market && <span className="text-xs ml-1" style={{ color: MUTE }}>時価</span>}</span>
-                <span style={{ fontFamily: MINCHO, color: v < 0 ? SHU : INK }}>{yen(v)}</span>
-              </li>
-            );
-          })}
-        </ul>
       </section>
 
       {/* 評価額の更新 */}
@@ -2154,7 +2237,6 @@ function AccountsTab({ accounts, setAccounts, entries, onSnapshot }) {
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<Kakeibo />);
-
 </script>
 </body>
 </html>
