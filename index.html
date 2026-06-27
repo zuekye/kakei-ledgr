@@ -301,8 +301,26 @@ function Kakeibo() {
     return [...s].sort().reverse();
   }, [entries]);
 
-  const inMonth = (e) => month === "all" || monthOf(e.date) === month;
-  const upToMonth = (e) => month === "all" || monthOf(e.date) <= month;
+  // 年のリスト（記帳が増えれば自動で増える。現在の年も必ず含む）
+  const years = useMemo(() => {
+    const s = new Set(entries.map((e) => (e.date || "").slice(0, 4)).filter(Boolean));
+    s.add(thisMonth().slice(0, 4));
+    return [...s].sort().reverse();
+  }, [entries]);
+
+  // month の値: "all"（全期間） / "2026"（年） / "2026-06"（月）
+  const matchPeriod = (d, m) => {
+    if (m === "all") return true;
+    if (m.length === 4) return (d || "").slice(0, 4) === m;   // 年指定
+    return monthOf(d) === m;                                  // 月指定
+  };
+  const matchUpTo = (d, m) => {
+    if (m === "all") return true;
+    if (m.length === 4) return (d || "").slice(0, 4) <= m;    // その年末まで
+    return monthOf(d) <= m;
+  };
+  const inMonth = (e) => matchPeriod(e.date, month);
+  const upToMonth = (e) => matchUpTo(e.date, month);
 
   const totals = (filter) => {
     const t = {};
@@ -376,7 +394,8 @@ function Kakeibo() {
     ["budget", "予算"], ["reports", "帳票"], ["accounts", "科目"], ["io", "入出力"],
   ];
 
-  const targetMonth = month === "all" ? thisMonth() : month;
+  // 予算・固定費が使う対象月。年や全期間が選ばれているときは今月を使う
+  const targetMonth = (month === "all" || month.length === 4) ? thisMonth() : month;
 
   return (
     <div className="min-h-screen" style={{ background: PAPER, color: INK }}>
@@ -386,41 +405,42 @@ function Kakeibo() {
             <p className="text-xs tracking-widest" style={{ color: MUTE }}>複式簿記 家計帳</p>
             <h1 className="text-2xl mt-1" style={{ fontFamily: MINCHO, fontWeight: 600 }}>Kakei Ledgr</h1>
           </div>
-          <div className="text-right">
-            <select value={month} onChange={(ev) => setMonth(ev.target.value)}
-              className="text-sm bg-transparent border rounded px-2 py-1" style={{ borderColor: RULE }}>
-              <option value="all">全期間</option>
-              {months.map((m) => <option key={m} value={m}>{m.replace("-", "年")}月</option>)}
-            </select>
-            <p className="text-xs mt-1" style={{ color: MUTE }}>{saveState}</p>
+          <div className="flex flex-col items-end gap-1.5">
+            {/* 戻る・進む ＋ 期間選択（横並び） */}
+            <div className="flex items-center gap-2">
+              <button onClick={undo} disabled={history.length === 0}
+                aria-label="元に戻す"
+                className="p-0.5 transition-opacity"
+                style={{ opacity: history.length === 0 ? 0.25 : 1, cursor: history.length === 0 ? "default" : "pointer" }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none"
+                  stroke="#3B82F6" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="9 14 4 9 9 4" />
+                  <path d="M4 9h11a5 5 0 0 1 5 5v0a5 5 0 0 1-5 5H9" />
+                </svg>
+              </button>
+              <button onClick={redo} disabled={future.length === 0}
+                aria-label="進める"
+                className="p-0.5 transition-opacity"
+                style={{ opacity: future.length === 0 ? 0.25 : 1, cursor: future.length === 0 ? "default" : "pointer" }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none"
+                  stroke="#3B82F6" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="15 14 20 9 15 4" />
+                  <path d="M20 9H9a5 5 0 0 0-5 5v0a5 5 0 0 0 5 5h6" />
+                </svg>
+              </button>
+              <select value={month} onChange={(ev) => setMonth(ev.target.value)}
+                className="text-sm bg-transparent border rounded px-2 py-1" style={{ borderColor: RULE }}>
+                <option value="all">全期間</option>
+                <optgroup label="年で見る">
+                  {years.map((y) => <option key={"y" + y} value={y}>{y}年</option>)}
+                </optgroup>
+                <optgroup label="月で見る">
+                  {months.map((m) => <option key={m} value={m}>{m.replace("-", "年")}月</option>)}
+                </optgroup>
+              </select>
+            </div>
+            <p className="text-xs" style={{ color: MUTE }}>{saveState}</p>
           </div>
-        </div>
-        <div className="max-w-3xl mx-auto mt-3 flex items-center gap-2">
-          <button onClick={undo} disabled={history.length === 0}
-            className="text-xs px-3 py-1.5 rounded border flex items-center gap-1"
-            style={{
-              borderColor: history.length === 0 ? RULE : INK,
-              color: history.length === 0 ? RULE : INK,
-              background: history.length === 0 ? "transparent" : "#fff",
-            }}>
-            ↶ 元に戻す
-          </button>
-          <button onClick={redo} disabled={future.length === 0}
-            className="text-xs px-3 py-1.5 rounded border flex items-center gap-1"
-            style={{
-              borderColor: future.length === 0 ? RULE : INK,
-              color: future.length === 0 ? RULE : INK,
-              background: future.length === 0 ? "transparent" : "#fff",
-            }}>
-            ↷ 進める
-          </button>
-          {(history.length > 0 || future.length > 0) && (
-            <span className="text-xs" style={{ color: MUTE }}>
-              {history.length > 0 && lastAction && `直前：${lastAction}`}
-              {history.length > 0 && `（戻す ${history.length}）`}
-              {future.length > 0 && `（進む ${future.length}）`}
-            </span>
-          )}
         </div>
       </header>
 
@@ -730,7 +750,7 @@ function AssetsTab({ accounts, setAccounts, accMap, entries, totals, onAdd, mont
   const trend = useMemo(() => {
     if (entries.length === 0) return [];
     const allMonths = [...new Set(entries.map((e) => monthOf(e.date)))].sort();
-    const end = month === "all" ? thisMonth() : month;
+    const end = month === "all" ? thisMonth() : month.length === 4 ? `${month}-12` : month;
     const first = allMonths[0];
     const list = [];
     let m = first;
@@ -1529,7 +1549,7 @@ function PLView({ accounts, totals, month }) {
   const income = rows("income").reduce((s, x) => s + x.v, 0);
   const expense = rows("expense").reduce((s, x) => s + x.v, 0);
   const net = income - expense;
-  const label = month === "all" ? "全期間" : month.replace("-", "年") + "月";
+  const label = month === "all" ? "全期間" : month.length === 4 ? month + "年" : month.replace("-", "年") + "月";
   return (
     <section className="bg-white border rounded-lg py-3" style={{ borderColor: RULE }}>
       <h2 className="px-3 pb-2 text-sm border-b" style={{ fontFamily: MINCHO, fontWeight: 600, borderColor: RULE }}>
@@ -1559,7 +1579,7 @@ function BSView({ accounts, totals, month }) {
   const liabEqSum = liabEq.reduce((s, x) => s + x.v, 0);
   const cumNet = accounts.filter((a) => a.type === "income").reduce((s, a) => s + balanceOf(a, totals), 0)
     - accounts.filter((a) => a.type === "expense").reduce((s, a) => s + balanceOf(a, totals), 0);
-  const label = month === "all" ? "現在" : month.replace("-", "年") + "月末時点";
+  const label = month === "all" ? "現在" : month.length === 4 ? month + "年末時点" : month.replace("-", "年") + "月末時点";
   return (
     <section className="bg-white border rounded-lg py-3" style={{ borderColor: RULE }}>
       <h2 className="px-3 pb-2 text-sm border-b" style={{ fontFamily: MINCHO, fontWeight: 600, borderColor: RULE }}>
