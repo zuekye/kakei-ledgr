@@ -1418,40 +1418,102 @@ function BudgetTab({ accounts, accMap, totals, budgets, setBudgets, fixed, setFi
   const expenses = accounts.filter((a) => a.type === "expense" && a.id !== "loss");
   const [fName, setFName] = useState("");
   const [fAmount, setFAmount] = useState("");
+  const [fCycle, setFCycle] = useState("monthly");
   const [fDebit, setFDebit] = useState("liv");
   const [fCredit, setFCredit] = useState("bank");
 
   const addFixed = () => {
     const n = Number(fAmount);
     if (!fName.trim() || !n || n <= 0) return;
-    setFixed((p) => [...p, { id: uid(), name: fName.trim(), amount: n, debit: fDebit, credit: fCredit }]);
+    setFixed((p) => [...p, { id: uid(), name: fName.trim(), amount: n, debit: fDebit, credit: fCredit, cycle: fCycle }]);
     setFName(""); setFAmount("");
   };
 
+  const targetYear = targetMonth.slice(0, 4);
   const recordedThisMonth = (f) =>
     entries.some((e) => e.fixedId === f.id && monthOf(e.date) === targetMonth);
+  const recordedThisYear = (f) =>
+    entries.some((e) => e.fixedId === f.id && e.date.slice(0, 4) === targetYear);
 
   const recordFixed = (f) => {
     if (recordedThisMonth(f)) return;
     const date = targetMonth === thisMonth() ? today() : targetMonth + "-28";
     onAdd({ id: uid(), date, debit: f.debit, credit: f.credit, amount: f.amount, memo: `固定費: ${f.name}`, fixedId: f.id });
   };
+  const recordFixedYearly = (f) => {
+    if (recordedThisYear(f)) return;
+    const date = targetMonth === thisMonth() ? today() : targetMonth + "-28";
+    onAdd({ id: uid(), date, debit: f.debit, credit: f.credit, amount: f.amount, memo: `固定費(年): ${f.name}`, fixedId: f.id });
+  };
 
-  // 固定費の並び替え（上下入れ替え）
-  const moveFixed = (idx, dir) => {
-    const j = idx + dir;
-    if (j < 0 || j >= fixed.length) return;
+  // 周期で分類（cycle 未設定の既存データは月額として扱う）
+  const monthlyItems = fixed.filter((f) => f.cycle !== "yearly");
+  const yearlyItems = fixed.filter((f) => f.cycle === "yearly");
+  const monthlySum = monthlyItems.reduce((s, f) => s + f.amount, 0);
+  const yearlySum = yearlyItems.reduce((s, f) => s + f.amount, 0);
+  const yearlyPerMonth = Math.round(yearlySum / 12);
+  const monthlyEquivalent = monthlySum + yearlyPerMonth;   // 年額を月割りして月額に合算
+  const annualTotal = monthlySum * 12 + yearlySum;          // 年間の固定費総額
+  const barMonthlyPct = monthlyEquivalent > 0 ? (monthlySum / monthlyEquivalent) * 100 : 0;
+  const YEAR_COLOR = "#C28A3A";                             // 年サブスク（月割り）の色
+
+  // 月サブスクの当月記帳状況（一括記帳の対象は月サブスクのみ）
+  const monthlyDoneTotal = monthlyItems.filter((f) => recordedThisMonth(f)).reduce((s, f) => s + f.amount, 0);
+  const monthlyRemain = monthlySum - monthlyDoneTotal;
+
+  // 並び替え（同じ周期グループ内で上下入れ替え）
+  const moveFixed = (item, dir, group) => {
+    const ids = group.map((g) => g.id);
+    const targetId = ids[ids.indexOf(item.id) + dir];
+    if (targetId == null) return;
     setFixed((p) => {
       const next = [...p];
-      [next[idx], next[j]] = [next[j], next[idx]];
+      const i = next.findIndex((x) => x.id === item.id);
+      const j = next.findIndex((x) => x.id === targetId);
+      [next[i], next[j]] = [next[j], next[i]];
       return next;
     });
   };
 
-  // 固定費の合計と、当月の記帳状況
-  const fixedTotal = fixed.reduce((s, f) => s + f.amount, 0);
-  const fixedDoneTotal = fixed.filter((f) => recordedThisMonth(f)).reduce((s, f) => s + f.amount, 0);
-  const fixedRemain = fixedTotal - fixedDoneTotal;
+  // 固定費1件の行（月・年で共通）
+  const renderFixedItem = (f, idx, group) => {
+    const isYearly = f.cycle === "yearly";
+    const done = isYearly ? recordedThisYear(f) : recordedThisMonth(f);
+    return (
+      <li key={f.id} className="py-2 flex items-center gap-2 text-sm" style={{ borderColor: RULE }}>
+        <span className="flex flex-col leading-none">
+          <button onClick={() => moveFixed(f, -1, group)} disabled={idx === 0}
+            className="text-xs px-1" style={{ color: idx === 0 ? RULE : MUTE }} aria-label="上へ">▲</button>
+          <button onClick={() => moveFixed(f, 1, group)} disabled={idx === group.length - 1}
+            className="text-xs px-1" style={{ color: idx === group.length - 1 ? RULE : MUTE }} aria-label="下へ">▼</button>
+        </span>
+        <span className="flex-1 min-w-0">
+          {f.name}
+          <span className="block text-xs" style={{ color: MUTE }}>
+            {accMap[f.debit]?.name}／{accMap[f.credit]?.name}
+          </span>
+        </span>
+        <span className="text-right shrink-0">
+          <span className="block" style={{ fontFamily: MINCHO }}>
+            {yen(f.amount)}<span className="text-xs" style={{ color: MUTE }}>／{isYearly ? "年" : "月"}</span>
+          </span>
+          {isYearly && <span className="block text-xs" style={{ color: MUTE }}>月割 {yen(Math.round(f.amount / 12))}</span>}
+        </span>
+        {done ? (
+          <span className="text-xs px-2 py-1 rounded whitespace-nowrap" style={{ color: MUTE, background: PAPER }}>
+            {isYearly ? "今年記帳済" : "今月記帳済"}
+          </span>
+        ) : (
+          <button onClick={() => (isYearly ? recordFixedYearly(f) : recordFixed(f))}
+            className="text-xs px-3 py-1.5 rounded text-white whitespace-nowrap" style={{ background: INK }}>
+            {isYearly ? "今年分を記帳" : "今月分を記帳"}
+          </button>
+        )}
+        <button onClick={() => setFixed((p) => p.filter((x) => x.id !== f.id))}
+          className="text-xs" style={{ color: MUTE }} aria-label={`固定費「${f.name}」を削除`}>✕</button>
+      </li>
+    );
+  };
 
   const budgetTotal = expenses.reduce((s, a) => s + (Number(budgets[a.id]) || 0), 0);
   const actualTotal = expenses.reduce((s, a) => s + balanceOf(a, totals), 0);
@@ -1501,80 +1563,125 @@ function BudgetTab({ accounts, accMap, totals, budgets, setBudgets, fixed, setFi
         </div>
       </section>
 
-      {/* 固定費管理 */}
+      {/* 固定費管理（月サブスク / 年サブスク） */}
       <section className="bg-white border rounded-lg p-4" style={{ borderColor: RULE }}>
         <h2 className="text-sm mb-1" style={{ fontFamily: MINCHO, fontWeight: 600 }}>固定費管理</h2>
         <p className="text-xs mb-3" style={{ color: MUTE }}>
-          家賃や通信費など毎月の固定費を登録すると、ワンタップでその月の仕訳を記帳できます。▲▼で並び替えできます。
+          月サブスクと年サブスクに分けて登録できます。年サブスクは月割りして月額に合算し、実質の月額固定費を表示します。▲▼で並び替えできます。
         </p>
         {fixed.length > 0 && (
           <>
-            <ul className="divide-y mb-3" style={{ borderColor: RULE }}>
-              {fixed.map((f, idx) => {
-                const done = recordedThisMonth(f);
-                return (
-                  <li key={f.id} className="py-2 flex items-center gap-2 text-sm" style={{ borderColor: RULE }}>
-                    <span className="flex flex-col leading-none">
-                      <button onClick={() => moveFixed(idx, -1)} disabled={idx === 0}
-                        className="text-xs px-1" style={{ color: idx === 0 ? RULE : MUTE }} aria-label="上へ">▲</button>
-                      <button onClick={() => moveFixed(idx, 1)} disabled={idx === fixed.length - 1}
-                        className="text-xs px-1" style={{ color: idx === fixed.length - 1 ? RULE : MUTE }} aria-label="下へ">▼</button>
-                    </span>
-                    <span className="flex-1 min-w-0">
-                      {f.name}
-                      <span className="block text-xs" style={{ color: MUTE }}>
-                        {accMap[f.debit]?.name}／{accMap[f.credit]?.name}
-                      </span>
-                    </span>
-                    <span style={{ fontFamily: MINCHO }}>{yen(f.amount)}</span>
-                    {done ? (
-                      <span className="text-xs px-2 py-1 rounded" style={{ color: MUTE, background: PAPER }}>今月記帳済</span>
-                    ) : (
-                      <button onClick={() => recordFixed(f)}
-                        className="text-xs px-3 py-1.5 rounded text-white" style={{ background: INK }}>
-                        今月分を記帳
-                      </button>
-                    )}
-                    <button onClick={() => setFixed((p) => p.filter((x) => x.id !== f.id))}
-                      className="text-xs" style={{ color: MUTE }} aria-label={`固定費「${f.name}」を削除`}>✕</button>
-                  </li>
-                );
-              })}
-            </ul>
-
-            {/* 合計 */}
-            <div className="border-t pt-2 mb-3 space-y-1" style={{ borderColor: INK }}>
-              <div className="flex justify-between text-sm">
-                <span style={{ fontFamily: MINCHO, fontWeight: 600 }}>固定費 合計（月額）</span>
-                <span style={{ fontFamily: MINCHO, fontWeight: 600 }}>{yen(fixedTotal)}</span>
+            {/* 月換算の可視化バー */}
+            <div className="mb-4">
+              <div className="flex justify-between text-xs mb-1">
+                <span style={{ color: MUTE }}>実質の月額固定費</span>
+                <span style={{ fontFamily: MINCHO, fontWeight: 600 }}>{yen(monthlyEquivalent)}／月</span>
               </div>
-              <div className="flex justify-between text-xs" style={{ color: MUTE }}>
-                <span>うち今月記帳済</span>
-                <span style={{ fontFamily: MINCHO }}>{yen(fixedDoneTotal)}</span>
+              <div className="flex h-3 rounded-full overflow-hidden" style={{ background: PAPER }}>
+                <div style={{ width: barMonthlyPct + "%", background: INK }} />
+                <div style={{ width: (100 - barMonthlyPct) + "%", background: YEAR_COLOR }} />
               </div>
-              <div className="flex justify-between text-xs" style={{ color: fixedRemain > 0 ? SHU : MUTE }}>
-                <span>今月の記帳残り</span>
-                <span style={{ fontFamily: MINCHO }}>{yen(fixedRemain)}</span>
+              <div className="flex gap-4 mt-1.5 text-xs" style={{ color: MUTE }}>
+                <span className="flex items-center gap-1">
+                  <span style={{ width: 9, height: 9, borderRadius: 9999, background: INK, display: "inline-block" }} />
+                  月サブスク {yen(monthlySum)}
+                </span>
+                <span className="flex items-center gap-1">
+                  <span style={{ width: 9, height: 9, borderRadius: 9999, background: YEAR_COLOR, display: "inline-block" }} />
+                  年サブスク月割り {yen(yearlyPerMonth)}
+                </span>
               </div>
             </div>
 
-            {/* 一括記帳 */}
-            {fixedRemain > 0 && (
+            {/* 月サブスク */}
+            {monthlyItems.length > 0 && (
+              <div className="mb-3">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="flex items-center gap-1.5 text-xs" style={{ fontWeight: 600 }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 9999, background: INK, display: "inline-block" }} />
+                    月サブスク
+                  </span>
+                  <span className="text-xs" style={{ fontFamily: MINCHO, color: MUTE }}>{yen(monthlySum)}／月</span>
+                </div>
+                <ul className="divide-y" style={{ borderColor: RULE }}>
+                  {monthlyItems.map((f, idx) => renderFixedItem(f, idx, monthlyItems))}
+                </ul>
+              </div>
+            )}
+
+            {/* 年サブスク */}
+            {yearlyItems.length > 0 && (
+              <div className="mb-3">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="flex items-center gap-1.5 text-xs" style={{ fontWeight: 600 }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 9999, background: YEAR_COLOR, display: "inline-block" }} />
+                    年サブスク
+                  </span>
+                  <span className="text-xs" style={{ fontFamily: MINCHO, color: MUTE }}>{yen(yearlySum)}／年</span>
+                </div>
+                <ul className="divide-y" style={{ borderColor: RULE }}>
+                  {yearlyItems.map((f, idx) => renderFixedItem(f, idx, yearlyItems))}
+                </ul>
+              </div>
+            )}
+
+            {/* 合計サマリー */}
+            <div className="border-t pt-2 mb-3 space-y-1" style={{ borderColor: INK }}>
+              <div className="flex justify-between text-sm">
+                <span>月サブスク合計</span>
+                <span style={{ fontFamily: MINCHO }}>{yen(monthlySum)}<span className="text-xs" style={{ color: MUTE }}>／月</span></span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span>年サブスク合計</span>
+                <span style={{ fontFamily: MINCHO }}>{yen(yearlySum)}<span className="text-xs" style={{ color: MUTE }}>／年</span></span>
+              </div>
+              <div className="flex justify-between text-xs" style={{ color: MUTE }}>
+                <span>　└ 月割り</span>
+                <span style={{ fontFamily: MINCHO }}>{yen(yearlyPerMonth)}／月</span>
+              </div>
+              <div className="flex justify-between text-sm pt-1.5 border-t" style={{ borderColor: RULE, fontWeight: 600 }}>
+                <span>実質の月額固定費（合算）</span>
+                <span style={{ fontFamily: MINCHO, color: INK }}>{yen(monthlyEquivalent)}／月</span>
+              </div>
+              <div className="flex justify-between text-xs" style={{ color: MUTE }}>
+                <span>年間の固定費総額</span>
+                <span style={{ fontFamily: MINCHO }}>{yen(annualTotal)}／年</span>
+              </div>
+            </div>
+
+            {/* 一括記帳（月サブスクのみ） */}
+            {monthlyRemain > 0 && (
               <button
-                onClick={() => fixed.forEach((f) => { if (!recordedThisMonth(f)) recordFixed(f); })}
+                onClick={() => monthlyItems.forEach((f) => { if (!recordedThisMonth(f)) recordFixed(f); })}
                 className="w-full text-xs px-3 py-2 rounded border mb-4"
                 style={{ borderColor: INK, color: INK }}>
-                未記帳の固定費をまとめて今月分記帳（{yen(fixedRemain)}）
+                未記帳の月サブスクをまとめて今月分記帳（{yen(monthlyRemain)}）
               </button>
             )}
           </>
         )}
-        <div className="flex gap-2 flex-wrap">
-          <input value={fName} onChange={(ev) => setFName(ev.target.value)} placeholder="名称（例: 家賃）"
-            className="flex-1 border rounded px-2 py-2 text-sm min-w-28" style={{ borderColor: RULE }} />
-          <input type="number" inputMode="numeric" value={fAmount} onChange={(ev) => setFAmount(ev.target.value)}
-            placeholder="金額" className="w-24 border rounded px-2 py-2 text-sm text-right" style={{ borderColor: RULE }} />
-          <div className="w-full grid grid-cols-2 gap-2">
+
+        {/* 追加フォーム */}
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <input value={fName} onChange={(ev) => setFName(ev.target.value)} placeholder="名称（例: 家賃 / Netflix）"
+              className="flex-1 border rounded px-2 py-2 text-sm min-w-28" style={{ borderColor: RULE }} />
+            <input type="number" inputMode="numeric" value={fAmount} onChange={(ev) => setFAmount(ev.target.value)}
+              placeholder="金額" className="w-24 border rounded px-2 py-2 text-sm text-right" style={{ borderColor: RULE }} />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs" style={{ color: MUTE }}>周期</span>
+            <div className="flex rounded border overflow-hidden" style={{ borderColor: RULE }}>
+              {[["monthly", "月額"], ["yearly", "年額"]].map(([k, label]) => (
+                <button key={k} onClick={() => setFCycle(k)} className="px-3 py-1.5 text-xs"
+                  style={{ background: fCycle === k ? INK : "#fff", color: fCycle === k ? "#fff" : MUTE }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <span className="text-xs" style={{ color: MUTE }}>{fCycle === "yearly" ? "年額で入力" : "月額で入力"}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
             <AccountSelect accounts={accounts} value={fDebit} onChange={setFDebit} filterTypes={["expense"]} />
             <AccountSelect accounts={accounts} value={fCredit} onChange={setFCredit} filterTypes={["asset", "liability"]} />
           </div>
