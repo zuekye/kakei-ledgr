@@ -395,14 +395,21 @@ function Kakeibo() {
   const addEntry = (entry) => { pushHistory("記帳"); setEntries((p) => [...p, entry]); };
   const addEntries = (list) => { pushHistory("インポート"); setEntries((p) => [...p, ...list]); };
   const deleteEntry = (id) => { pushHistory("仕訳の削除"); setEntries((p) => p.filter((e) => e.id !== id)); };
-  const settleAdvance = (advanceEntry, depositAccId) => {
+  const settleAdvance = (advanceEntry, depositAccId, settleDate) => {
     pushHistory("立替の精算");
     const settle = {
-      id: uid(), date: today(), debit: depositAccId, credit: ADV,
+      id: uid(), date: settleDate || today(), debit: depositAccId, credit: ADV,
       amount: advanceEntry.amount, memo: `立替精算: ${advanceEntry.memo || ""}`.trim(),
       settleOf: advanceEntry.id,
     };
     setEntries((p) => p.map((e) => (e.id === advanceEntry.id ? { ...e, settled: true } : e)).concat(settle));
+  };
+
+  // 精算日の後から変更（該当の精算仕訳の日付を書き換える）
+  const changeSettleDate = (advanceId, newDate) => {
+    if (!newDate) return;
+    pushHistory("精算日の変更");
+    setEntries((p) => p.map((e) => (e.settleOf === advanceId ? { ...e, date: newDate } : e)));
   };
 
   // 科目の変更を履歴付きで行うためのラッパー（並び替え・追加・削除・改名・時価切替など）
@@ -424,7 +431,9 @@ function Kakeibo() {
 
   return (
     <div className="min-h-screen" style={{ background: PAPER, color: INK }}>
-      <header className="px-5 pt-6 pb-4 border-b-2" style={{ borderColor: INK }}>
+      {/* ヘッダー＋タブを画面上部に固定（Excelの行固定イメージ） */}
+      <div className="sticky top-0 z-40" style={{ background: PAPER, paddingTop: "env(safe-area-inset-top)" }}>
+      <header className="px-5 pt-4 pb-3 border-b-2" style={{ borderColor: INK }}>
         <div className="flex items-end justify-between max-w-3xl mx-auto">
           <div>
             <p className="text-xs tracking-widest" style={{ color: MUTE }}>複式簿記 家計帳</p>
@@ -483,6 +492,7 @@ function Kakeibo() {
           </button>
         ))}
       </nav>
+      </div>
 
       <main className="max-w-3xl mx-auto px-4 py-5 pb-16">
         {!loaded ? (
@@ -498,11 +508,12 @@ function Kakeibo() {
           <CardsTab accounts={accounts} setAccounts={setAccounts} accMap={accMap}
             entries={entries} onAdd={addEntry} onDelete={deleteEntry} onSnapshot={pushHistory} />
         ) : tab === "advance" ? (
-          <AdvanceTab accounts={accounts} accMap={accMap} entries={entries} onSettle={settleAdvance} />
+          <AdvanceTab accounts={accounts} accMap={accMap} entries={entries} onSettle={settleAdvance}
+            onChangeSettleDate={changeSettleDate} />
         ) : tab === "budget" ? (
           <BudgetTab accounts={accounts} accMap={accMap} totals={totals(inMonth)}
             budgets={budgets} setBudgets={setBudgets} fixed={fixed} setFixed={setFixed}
-            entries={entries} onAdd={addEntry} targetMonth={targetMonth} />
+            entries={entries} onAdd={addEntry} targetMonth={targetMonth} period={month} />
         ) : tab === "reports" ? (
           <ReportsTab accounts={accounts} accMap={accMap}
             plTotals={totals(inMonth)} bsTotals={totals(upToMonth)}
@@ -1391,13 +1402,21 @@ function CardEditor({ card, accounts, setAccounts, onClose, onSnapshot }) {
 }
 
 // ---------- 立替管理 ----------
-function AdvanceTab({ accounts, accMap, entries, onSettle }) {
+function AdvanceTab({ accounts, accMap, entries, onSettle, onChangeSettleDate }) {
   const [deposit, setDeposit] = useState("bank");
+  const [settleDate, setSettleDate] = useState(today());
+  const [editDateId, setEditDateId] = useState(null); // 精算日を編集中の立替ID
   const advances = entries
     .filter((e) => e.debit === ADV)
     .sort((a, b) => (a.date < b.date ? 1 : -1));
   const unsettled = advances.filter((e) => !e.settled);
   const unsettledTotal = unsettled.reduce((s, e) => s + e.amount, 0);
+  // 立替ID → 精算仕訳（精算日の表示・変更に使う）
+  const settleMap = useMemo(() => {
+    const m = {};
+    for (const e of entries) if (e.settleOf) m[e.settleOf] = e;
+    return m;
+  }, [entries]);
 
   return (
     <div className="space-y-5">
@@ -1409,41 +1428,65 @@ function AdvanceTab({ accounts, accMap, entries, onSettle }) {
           </p>
           <p className="text-xs mt-0.5" style={{ color: MUTE }}>{unsettled.length}件</p>
         </div>
-        <div className="text-right">
-          <p className="text-xs mb-1" style={{ color: MUTE }}>精算金の入金先</p>
-          <AccountSelect accounts={accounts.filter((a) => a.id !== ADV)} value={deposit}
-            onChange={setDeposit} filterTypes={["asset"]} />
+        <div className="text-right space-y-1.5">
+          <div>
+            <p className="text-xs mb-1" style={{ color: MUTE }}>精算金の入金先</p>
+            <AccountSelect accounts={accounts.filter((a) => a.id !== ADV)} value={deposit}
+              onChange={setDeposit} filterTypes={["asset"]} />
+          </div>
+          <div>
+            <p className="text-xs mb-1" style={{ color: MUTE }}>精算日</p>
+            <input type="date" value={settleDate} onChange={(ev) => setSettleDate(ev.target.value)}
+              className="text-sm bg-white border rounded px-2 py-1" style={{ borderColor: RULE }} />
+          </div>
         </div>
       </div>
 
       <p className="text-xs" style={{ color: MUTE }}>
-        経費を立て替えたら、仕訳帳の「経費立替（現金）」「経費立替（カード）」テンプレで記帳するとここに表示されます。会社などから返金されたら「精算」を押すと、入金仕訳が自動で作成されます。
+        経費を立て替えたら、仕訳帳の「経費立替（現金）」「経費立替（カード）」テンプレで記帳するとここに表示されます。会社などから返金されたら、精算日を選んで「精算」を押すと入金仕訳が自動で作成されます。精算日はあとから変更できます。
       </p>
 
       {advances.length === 0 ? (
         <p className="text-sm py-8 text-center" style={{ color: MUTE }}>立替の記録はまだありません。</p>
       ) : (
         <ul className="bg-white border rounded-lg divide-y" style={{ borderColor: RULE }}>
-          {advances.map((e) => (
-            <li key={e.id} className="px-3 py-2.5 flex items-center gap-3" style={{ borderColor: RULE }}>
-              <span className="text-xs w-14 shrink-0" style={{ color: MUTE }}>{e.date.slice(2).replaceAll("-", "/")}</span>
-              <span className="flex-1 min-w-0 text-sm">
-                {e.memo || "経費立替"}
-                <span className="block text-xs" style={{ color: MUTE }}>
-                  支払元: {accMap[e.credit]?.name ?? "?"}
+          {advances.map((e) => {
+            const st = settleMap[e.id];
+            return (
+              <li key={e.id} className="px-3 py-2.5 flex items-center gap-3" style={{ borderColor: RULE }}>
+                <span className="text-xs w-14 shrink-0" style={{ color: MUTE }}>{e.date.slice(2).replaceAll("-", "/")}</span>
+                <span className="flex-1 min-w-0 text-sm">
+                  {e.memo || "経費立替"}
+                  <span className="block text-xs" style={{ color: MUTE }}>
+                    支払元: {accMap[e.credit]?.name ?? "?"}
+                  </span>
                 </span>
-              </span>
-              <span className="text-sm" style={{ fontFamily: MINCHO }}>{yen(e.amount)}</span>
-              {e.settled ? (
-                <span className="text-xs px-2 py-1 rounded" style={{ color: MUTE, background: PAPER }}>精算済</span>
-              ) : (
-                <button onClick={() => onSettle(e, deposit)}
-                  className="text-xs px-3 py-1.5 rounded text-white" style={{ background: SHU }}>
-                  精算
-                </button>
-              )}
-            </li>
-          ))}
+                <span className="text-sm" style={{ fontFamily: MINCHO }}>{yen(e.amount)}</span>
+                {e.settled ? (
+                  editDateId === e.id ? (
+                    <span className="flex items-center gap-1">
+                      <input type="date" value={st?.date ?? ""} autoFocus
+                        onChange={(ev) => onChangeSettleDate(e.id, ev.target.value)}
+                        className="text-xs bg-white border rounded px-1.5 py-1" style={{ borderColor: RULE }} />
+                      <button onClick={() => setEditDateId(null)} className="text-xs px-1.5" style={{ color: INK }}>完了</button>
+                    </span>
+                  ) : (
+                    <button onClick={() => setEditDateId(e.id)}
+                      className="text-xs px-2 py-1 rounded text-left" style={{ color: MUTE, background: PAPER }}
+                      aria-label="精算日を変更">
+                      精算済
+                      {st && <span className="block" style={{ fontFamily: MINCHO }}>{st.date.slice(2).replaceAll("-", "/")}</span>}
+                    </button>
+                  )
+                ) : (
+                  <button onClick={() => onSettle(e, deposit, settleDate)}
+                    className="text-xs px-3 py-1.5 rounded text-white" style={{ background: SHU }}>
+                    精算
+                  </button>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
@@ -1451,8 +1494,17 @@ function AdvanceTab({ accounts, accMap, entries, onSettle }) {
 }
 
 // ---------- 予算・固定費 ----------
-function BudgetTab({ accounts, accMap, totals, budgets, setBudgets, fixed, setFixed, entries, onAdd, targetMonth }) {
+function BudgetTab({ accounts, accMap, totals, budgets, setBudgets, fixed, setFixed, entries, onAdd, targetMonth, period }) {
   const expenses = accounts.filter((a) => a.type === "expense" && a.id !== "loss");
+  // 期間の種類：年（例 "2026"）なら予算を×12して年予算として比較する。全期間は予算比較なし（累計のみ）
+  const isYearView = typeof period === "string" && period.length === 4;
+  const isAllView = period === "all";
+  const mult = isYearView ? 12 : 1;
+  // 年表示の月平均用：その年で記帳のある月数（例: 7月まで記帳あり→7で割る）
+  const yearMonthCount = useMemo(() => {
+    if (!isYearView) return 0;
+    return new Set(entries.filter((e) => e.date.startsWith(period)).map((e) => monthOf(e.date))).size;
+  }, [entries, period, isYearView]);
   const [fName, setFName] = useState("");
   const [fAmount, setFAmount] = useState("");
   const [fCycle, setFCycle] = useState("monthly");
@@ -1552,7 +1604,7 @@ function BudgetTab({ accounts, accMap, totals, budgets, setBudgets, fixed, setFi
     );
   };
 
-  const budgetTotal = expenses.reduce((s, a) => s + (Number(budgets[a.id]) || 0), 0);
+  const budgetTotal = expenses.reduce((s, a) => s + (Number(budgets[a.id]) || 0) * mult, 0);
   const actualTotal = expenses.reduce((s, a) => s + balanceOf(a, totals), 0);
 
   return (
@@ -1560,28 +1612,44 @@ function BudgetTab({ accounts, accMap, totals, budgets, setBudgets, fixed, setFi
       {/* 予算管理 */}
       <section className="bg-white border rounded-lg p-4" style={{ borderColor: RULE }}>
         <h2 className="text-sm mb-1" style={{ fontFamily: MINCHO, fontWeight: 600 }}>
-          予算管理 <span className="text-xs font-normal" style={{ color: MUTE }}>{targetMonth.replace("-", "年")}月</span>
+          予算管理 <span className="text-xs font-normal" style={{ color: MUTE }}>
+            {isAllView ? "全期間（累計実績）" : isYearView ? `${period}年（年予算 = 月予算×12）` : `${targetMonth.replace("-", "年")}月`}
+          </span>
         </h2>
         <p className="text-xs mb-3" style={{ color: MUTE }}>
-          費用科目ごとに月予算を設定できます。実績は選択中の月の支出です。
+          {isAllView
+            ? "全期間表示では予算との比較は行わず、科目ごとの累計支出を表示します。"
+            : isYearView
+            ? `実績（その年の支出）は月予算を12倍した年予算と比較します。月平均は記帳のある${yearMonthCount}か月で割った値です。入力欄の値は月予算のままです。`
+            : "費用科目ごとに月予算を設定できます。実績は選択中の月の支出です。"}
         </p>
         <div className="space-y-3">
           {expenses.map((a) => {
-            const budget = Number(budgets[a.id]) || 0;
+            const budget = isAllView ? 0 : (Number(budgets[a.id]) || 0) * mult;
             const actual = balanceOf(a, totals);
             const pct = budget > 0 ? Math.min((actual / budget) * 100, 100) : 0;
             const over = budget > 0 && actual > budget;
+            const avg = isYearView && yearMonthCount > 0 ? Math.round(actual / yearMonthCount) : 0;
             return (
               <div key={a.id}>
                 <div className="flex items-center gap-2 text-sm">
                   <span className="flex-1">{a.name}</span>
                   <span style={{ fontFamily: MINCHO, color: over ? SHU : INK }}>{yen(actual)}</span>
-                  <span className="text-xs" style={{ color: MUTE }}>／</span>
-                  <input type="number" inputMode="numeric" value={budgets[a.id] ?? ""}
-                    onChange={(ev) => setBudgets((p) => ({ ...p, [a.id]: ev.target.value }))}
-                    placeholder="予算" className="w-24 border rounded px-2 py-1 text-right text-sm"
-                    style={{ borderColor: RULE, fontFamily: MINCHO }} />
+                  {!isAllView && <span className="text-xs" style={{ color: MUTE }}>／</span>}
+                  {isAllView ? null : isYearView ? (
+                    <span className="w-24 text-right text-sm" style={{ fontFamily: MINCHO, color: budget > 0 ? INK : MUTE }}>
+                      {budget > 0 ? yen(budget) : "—"}
+                    </span>
+                  ) : (
+                    <input type="number" inputMode="numeric" value={budgets[a.id] ?? ""}
+                      onChange={(ev) => setBudgets((p) => ({ ...p, [a.id]: ev.target.value }))}
+                      placeholder="予算" className="w-24 border rounded px-2 py-1 text-right text-sm"
+                      style={{ borderColor: RULE, fontFamily: MINCHO }} />
+                  )}
                 </div>
+                {isYearView && actual > 0 && (
+                  <p className="text-xs mt-0.5 text-right" style={{ color: MUTE }}>月平均 {yen(avg)}</p>
+                )}
                 {budget > 0 && (
                   <div className="h-1.5 rounded-full mt-1" style={{ background: PAPER }}>
                     <div className="h-1.5 rounded-full" style={{ width: pct + "%", background: over ? SHU : INK }} />
@@ -1592,11 +1660,19 @@ function BudgetTab({ accounts, accMap, totals, budgets, setBudgets, fixed, setFi
             );
           })}
         </div>
-        <div className="flex justify-between border-t mt-4 pt-2 text-sm" style={{ borderColor: INK }}>
-          <span style={{ fontFamily: MINCHO, fontWeight: 600 }}>合計</span>
-          <span style={{ fontFamily: MINCHO, fontWeight: 600, color: budgetTotal > 0 && actualTotal > budgetTotal ? SHU : INK }}>
-            {yen(actualTotal)}{budgetTotal > 0 && ` ／ ${yen(budgetTotal)}`}
-          </span>
+        <div className="border-t mt-4 pt-2" style={{ borderColor: INK }}>
+          <div className="flex justify-between text-sm">
+            <span style={{ fontFamily: MINCHO, fontWeight: 600 }}>合計</span>
+            <span style={{ fontFamily: MINCHO, fontWeight: 600, color: !isAllView && budgetTotal > 0 && actualTotal > budgetTotal ? SHU : INK }}>
+              {yen(actualTotal)}{!isAllView && budgetTotal > 0 && ` ／ ${yen(budgetTotal)}`}
+            </span>
+          </div>
+          {isYearView && yearMonthCount > 0 && (
+            <div className="flex justify-between text-xs mt-0.5" style={{ color: MUTE }}>
+              <span>月平均（記帳{yearMonthCount}か月）</span>
+              <span style={{ fontFamily: MINCHO }}>{yen(Math.round(actualTotal / yearMonthCount))}</span>
+            </div>
+          )}
         </div>
       </section>
 
