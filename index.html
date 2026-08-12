@@ -411,6 +411,10 @@ function Kakeibo() {
   };
 
   const addEntry = (entry) => { pushHistory("記帳"); setEntries((p) => [...p, entry]); };
+  const updateEntry = (id, patch) => {
+    pushHistory("仕訳の編集");
+    setEntries((p) => p.map((e) => (e.id === id ? { ...e, ...patch } : e)));
+  };
   const addEntries = (list) => { pushHistory("インポート"); setEntries((p) => [...p, ...list]); };
   const deleteEntry = (id) => { pushHistory("仕訳の削除"); setEntries((p) => p.filter((e) => e.id !== id)); };
   const settleAdvance = (advanceEntry, depositAccId, settleDate) => {
@@ -542,7 +546,8 @@ function Kakeibo() {
           <p className="text-center py-10 text-sm" style={{ color: MUTE }}>帳簿を開いています…</p>
         ) : tab === "journal" ? (
           <JournalTab accounts={accounts} accMap={accMap} entries={entries.filter(inMonth)}
-            templates={templates} setTemplates={setTemplates} onAdd={addEntry} onDelete={deleteEntry} />
+            templates={templates} setTemplates={setTemplates} onAdd={addEntry} onDelete={deleteEntry}
+            onUpdate={updateEntry} />
         ) : tab === "assets" ? (
           <AssetsTab accounts={accounts} setAccounts={setAccounts} accMap={accMap}
             entries={entries} totals={totals(upToMonth)} onAdd={addEntry} month={month}
@@ -656,7 +661,7 @@ function AccountSelect({ accounts, value, onChange, filterTypes }) {
 }
 
 // ---------- 仕訳帳 ----------
-function JournalTab({ accounts, accMap, entries, templates, setTemplates, onAdd, onDelete }) {
+function JournalTab({ accounts, accMap, entries, templates, setTemplates, onAdd, onDelete, onUpdate }) {
   const [date, setDate] = useState(today());
   const [debit, setDebit] = useState("food");
   const [credit, setCredit] = useState("cash");
@@ -670,6 +675,23 @@ function JournalTab({ accounts, accMap, entries, templates, setTemplates, onAdd,
   const [sortKey, setSortKey] = useState("date_desc"); // date_desc | date_asc | amount_desc | amount_asc
   const [showFilter, setShowFilter] = useState(false);
   const [confirmDel, setConfirmDel] = useState(null); // 削除確認中の仕訳ID
+  const [editId, setEditId] = useState(null);         // 編集中の仕訳ID
+  const [edit, setEdit] = useState(null);             // 編集フォームの値
+  const [editErr, setEditErr] = useState("");
+  const startEdit = (e) => {
+    setEditId(e.id);
+    setEdit({ date: e.date, debit: e.debit, credit: e.credit, amount: String(e.amount), memo: e.memo || "" });
+    setEditErr("");
+    setConfirmDel(null);
+  };
+  const saveEdit = () => {
+    const n = Number(edit.amount);
+    if (!edit.date) return setEditErr("日付を入力してください");
+    if (!n || n <= 0) return setEditErr("金額は1円以上を入力してください");
+    if (edit.debit === edit.credit) return setEditErr("借方と貸方には別の科目を選んでください");
+    onUpdate(editId, { date: edit.date, debit: edit.debit, credit: edit.credit, amount: n, memo: edit.memo.trim() });
+    setEditId(null); setEdit(null); setEditErr("");
+  };
 
   const applyTemplate = (t) => {
     setDebit(t.debit); setCredit(t.credit);
@@ -869,9 +891,44 @@ function JournalTab({ accounts, accMap, entries, templates, setTemplates, onAdd,
                     {e.memo && <span className="block text-xs truncate" style={{ color: MUTE }}>{e.memo}</span>}
                   </span>
                   <span className="text-sm text-right" style={{ fontFamily: MINCHO }}>{yen(e.amount)}</span>
+                  <button onClick={() => (editId === e.id ? setEditId(null) : startEdit(e))} className="text-xs px-1.5 py-1"
+                    style={{ color: editId === e.id ? INK : MUTE }} aria-label="この仕訳を編集">✎</button>
                   <button onClick={() => setConfirmDel(confirmDel === e.id ? null : e.id)} className="text-xs px-1.5 py-1"
                     style={{ color: MUTE }} aria-label="この仕訳を削除">✕</button>
                 </div>
+                {editId === e.id && edit && (
+                  <div className="mt-2 rounded px-3 py-2.5 space-y-2"
+                    style={{ background: PAPER, border: `1px solid ${RULE}` }}>
+                    <div className="flex gap-2">
+                      <input type="date" value={edit.date} onChange={(ev) => setEdit((p) => ({ ...p, date: ev.target.value }))}
+                        className="border rounded px-2 py-1.5 text-sm bg-white" style={{ borderColor: RULE }} />
+                      <input type="number" inputMode="numeric" value={edit.amount}
+                        onChange={(ev) => setEdit((p) => ({ ...p, amount: ev.target.value }))}
+                        placeholder="金額" className="flex-1 border rounded px-2 py-1.5 text-sm text-right bg-white"
+                        style={{ borderColor: RULE, fontFamily: MINCHO }} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <AccountSelect accounts={accounts} value={edit.debit}
+                        onChange={(v) => setEdit((p) => ({ ...p, debit: v }))} />
+                      <AccountSelect accounts={accounts} value={edit.credit}
+                        onChange={(v) => setEdit((p) => ({ ...p, credit: v }))} />
+                    </div>
+                    <input value={edit.memo} onChange={(ev) => setEdit((p) => ({ ...p, memo: ev.target.value }))}
+                      placeholder="摘要（メモ）" className="w-full border rounded px-2 py-1.5 text-sm bg-white" style={{ borderColor: RULE }} />
+                    {(e.fixedId || e.settleOf || e.debit === ADV) && (
+                      <p className="text-xs" style={{ color: MUTE }}>
+                        ※ この仕訳は{e.settleOf ? "立替の精算" : e.fixedId ? "固定費の記帳" : "立替の記帳"}と連動しています。科目を変えると立替・固定費の表示に影響する場合があります。
+                      </p>
+                    )}
+                    {editErr && <p className="text-xs" style={{ color: SHU }}>{editErr}</p>}
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => { setEditId(null); setEdit(null); setEditErr(""); }}
+                        className="text-xs px-3 py-1.5 rounded border" style={{ borderColor: RULE, color: MUTE }}>キャンセル</button>
+                      <button onClick={saveEdit}
+                        className="text-xs px-4 py-1.5 rounded text-white" style={{ background: INK }}>保存する</button>
+                    </div>
+                  </div>
+                )}
                 {confirmDel === e.id && (
                   <div className="mt-2 flex items-center justify-between rounded px-3 py-2"
                     style={{ background: "#FDF6F5", border: `1px solid ${SHU}` }}>
