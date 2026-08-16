@@ -47,8 +47,8 @@ const DEFAULT_ACCOUNTS = [
   { id: "point", name: "ポイント残高", type: "asset", market: true, pf: "pt" },
   { id: ADV, name: "立替金", type: "asset", protected: true, pf: "depo" },
   // 負債（貸方残高が通常）クレジットカード
-  { id: "cc_amexg", name: "AMEX Business Gold", type: "liability", card: true, closingDay: 31, payMonth: 1, payDay: 25 },
-  { id: "cc_amexh", name: "AMEX Hilton", type: "liability", card: true, closingDay: 31, payMonth: 1, payDay: 25 },
+  { id: "cc_amexg", name: "AMEX Business Gold", type: "liability", card: true, closingDay: 7, payMonth: 0, payDay: 27 },
+  { id: "cc_amexh", name: "AMEX Hilton", type: "liability", card: true, closingDay: 7, payMonth: 0, payDay: 27 },
   { id: "cc_paypay", name: "PayPayカード", type: "liability", card: true, closingDay: 31, payMonth: 1, payDay: 27 },
   { id: "cc_apa", name: "APA EPOS", type: "liability", card: true, closingDay: 27, payMonth: 2, payDay: 6 },
   { id: "cc_smccnl", name: "三井住友カードNL", type: "liability", card: true, closingDay: 15, payMonth: 2, payDay: 10 },
@@ -142,9 +142,9 @@ const thisMonth = () => monthOf(today());
 // カードの次回支払日を求める（締め月の利用分が payMonth ヶ月後の payDay に引き落とし）
 // シンプルに「今月利用分 → payMonth ヶ月後の payDay」として次回予定日を返す
 const nextPayDate = (card, baseMonth) => {
-  if (!card.payMonth || !card.payDay) return null;
+  if (card.payMonth == null || !card.payDay) return null; // 0 = 当月払いも有効
   const [y, m] = baseMonth.split("-").map(Number);
-  const total = (m - 1) + card.payMonth;
+  const total = (m - 1) + Number(card.payMonth);
   const py = y + Math.floor(total / 12);
   const pm = (total % 12) + 1;
   const day = String(card.payDay).padStart(2, "0");
@@ -154,7 +154,7 @@ const nextPayDate = (card, baseMonth) => {
 // 請求期間（締め日 = closingDate）に対応する実際の引き落とし日を返す。
 // 締め日の属する月から payMonth ヶ月後の payDay（月末超過は月末に丸め）。
 const payDateForClosing = (card, closingDate) => {
-  const pm = card.payMonth || 1;
+  const pm = card.payMonth ?? 1; // 0 = 当月払い
   const pd = card.payDay || 27;
   const [y, m] = closingDate.split("-").map(Number); // m: 1始まり
   const totalIdx = (y * 12 + (m - 1)) + pm;
@@ -1293,7 +1293,7 @@ function CardsTab({ accounts, setAccounts, accMap, entries, onAdd, onDelete, onS
                 <div className="min-w-0">
                   <p className="text-sm font-semibold" style={{ fontFamily: MINCHO }}>{card.name}</p>
                   <p className="text-xs mt-0.5" style={{ color: MUTE }}>
-                    翌{card.payMonth === 1 ? "月" : "々月"}{card.payDay}日払い
+                    {card.payMonth === 0 ? "当月" : card.payMonth === 1 ? "翌月" : "翌々月"}{card.payDay}日払い
                     {payDate && ` ・ 次回 ${payDate.slice(5).replace("-", "/")}`}
                   </p>
                 </div>
@@ -1523,7 +1523,7 @@ function CardUsageSummary({ card, entries, onPayCycle, isCyclePaid }) {
 function CardEditor({ card, accounts, setAccounts, onClose, onSnapshot }) {
   const [name, setName] = useState(card.name);
   const [closingDay, setClosingDay] = useState(card.closingDay || 31);
-  const [payMonth, setPayMonth] = useState(card.payMonth || 1);
+  const [payMonth, setPayMonth] = useState(card.payMonth ?? 1);
   const [payDay, setPayDay] = useState(card.payDay || 27);
 
   const save = () => {
@@ -1557,6 +1557,7 @@ function CardEditor({ card, accounts, setAccounts, onClose, onSnapshot }) {
             <label className="text-xs" style={{ color: MUTE }}>支払いタイミング</label>
             <select value={payMonth} onChange={(ev) => setPayMonth(ev.target.value)}
               className="w-full border rounded px-2 py-1.5 text-sm bg-white" style={{ borderColor: RULE }}>
+              <option value={0}>当月</option>
               <option value={1}>翌月</option>
               <option value={2}>翌々月</option>
             </select>
